@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "module": "ESNext",
+    "lib": [
+      "DOM",
+      "ES2017"
+    ],
+    "experimentalDecorators": true,
+    "moduleResolution": "node",
+    "strict": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "useDefineForClassFields": false,
+    "baseUrl": "."
+  },
+  "include": [
+    "assets/**/*.ts"
+  ]
+}
