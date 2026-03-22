@@ -7,9 +7,12 @@ import {
     Layers,
     Node,
     Size,
+    Sprite,
+    Tween,
     UITransform,
     UIOpacity,
     Vec2,
+    Vec3,
     math,
     sys,
     tween,
@@ -38,12 +41,33 @@ import {
 import { PointerInput } from '../core/PointerInput';
 import { SnookerPhysics } from '../core/SnookerPhysics';
 import { SnookerRules } from '../core/SnookerRules';
-import { BallState, BallType, MatchMode, PlayPhase } from '../core/SnookerTypes';
+import { BallLayout, BallState, BallType, MatchMode, PlayPhase, ShotResolution } from '../core/SnookerTypes';
+import { TextureSkinner } from '../ui/TextureSkinner';
 import { UiFactory } from '../ui/UiFactory';
+import { shiftColor, SnookerTheme, withAlpha } from '../ui/SnookerTheme';
 
 const { ccclass } = _decorator;
 const HIGH_SCORE_KEY = 'simple-snooker-high-score';
 const SOUND_KEY = 'simple-snooker-sound-enabled';
+
+type ButtonStyle = 'neutral' | 'blue' | 'green' | 'red';
+
+interface OverlayButtonConfig {
+    label: string;
+    style: ButtonStyle;
+    action: () => void;
+}
+
+interface ButtonOptions {
+    holdDurationMs?: number;
+}
+
+interface CollisionPrediction {
+    ball: BallState;
+    impactPoint: Vec2;
+    travelDistance: number;
+    targetDirection: Vec2;
+}
 
 @ccclass('SnookerGame')
 export class SnookerGame extends Component {
@@ -62,6 +86,11 @@ export class SnookerGame extends Component {
     private tableBallLayer!: Node;
     private fxLayer!: Node;
     private touchLayer!: Node;
+    private topHud!: Node;
+    private bottomHud!: Node;
+    private battleReportNode!: Node;
+    private battleReportOpacity!: UIOpacity;
+
     private aimGraphics!: Graphics;
     private cueGraphics!: Graphics;
     private powerFillGraphics!: Graphics;
@@ -70,15 +99,37 @@ export class SnookerGame extends Component {
     private breakLabel!: Label;
     private stageLabel!: Label;
     private shotsLabel!: Label;
+    private targetHintLabel!: Label;
     private statusLabel!: Label;
     private powerValueLabel!: Label;
+    private powerBandLabel!: Label;
+
+    private menuLevelNumberLabel!: Label;
     private menuLevelLabel!: Label;
+    private menuDifficultyLabel!: Label;
     private menuDetailLabel!: Label;
+    private menuTargetLabel!: Label;
+    private menuShotLimitLabel!: Label;
     private menuHighScoreLabel!: Label;
     private soundButtonLabel!: Label;
+    private menuPreviewBallLayer!: Node;
+    private menuThumbnailBallLayer!: Node;
+    private menuStartButton!: Node;
+
+    private helperButton!: Node;
+    private helperButtonLabel!: Label;
     private overlayTitleLabel!: Label;
     private overlayDetailLabel!: Label;
-    private overlayResumeButton!: Node;
+    private overlayPrimaryButton!: Node;
+    private overlaySecondaryButton!: Node;
+    private overlayTertiaryButton!: Node;
+    private overlayPrimaryLabel!: Label;
+    private overlaySecondaryLabel!: Label;
+    private overlayTertiaryLabel!: Label;
+
+    private overlayPrimaryAction: (() => void) | null = null;
+    private overlaySecondaryAction: (() => void) | null = null;
+    private overlayTertiaryAction: (() => void) | null = null;
 
     private balls: BallState[] = [];
     private pottedThisShot: BallState[] = [];
@@ -89,13 +140,31 @@ export class SnookerGame extends Component {
     private pottedCount = 0;
     private highScore = 0;
     private soundEnabled = true;
+    private helperAimEnabled = true;
+    private pocketGlowNodes: Node[] = [];
+    private tableBasePosition = v3(TABLE_CENTER.x, TABLE_CENTER.y, 0);
+    private topHudBasePosition = v3(0, 308, 0);
+    private topHudFocusPosition = v3(0, 328, 0);
+    private bottomHudBasePosition = v3(0, -308, 0);
+    private bottomHudFocusPosition = v3(0, -320, 0);
+    private battleReportBasePosition = v3(0, 214, 0);
+    private powerFillWidth = 292;
 
     protected onLoad(): void {
-        this.initializeRoot();
-        this.loadPersistentData();
-        this.buildSceneGraph();
-        this.bindPointerInput();
-        this.showMenu();
+        try {
+            this.initializeRoot();
+            this.loadPersistentData();
+            this.preloadTextures();
+            this.buildSceneGraph();
+            this.mustFindNode(this.node, 'MenuLayer').active = true;
+            this.mustFindNode(this.node, 'GameLayer').active = false;
+            this.mustFindNode(this.node, 'OverlayLayer').active = false;
+            this.bindPointerInput();
+            this.showMenu();
+            console.info('[SnookerGame] onLoad 完成，已切到主菜单。');
+        } catch (error) {
+            this.showFatalError(error);
+        }
     }
 
     protected onDestroy(): void {
@@ -133,14 +202,24 @@ export class SnookerGame extends Component {
     }
 
     private loadPersistentData(): void {
-        this.highScore = Number(sys.localStorage.getItem(HIGH_SCORE_KEY) ?? 0);
-        const soundRaw = sys.localStorage.getItem(SOUND_KEY);
-        this.soundEnabled = soundRaw === null ? true : soundRaw === '1';
+        try {
+            this.highScore = Number(sys.localStorage.getItem(HIGH_SCORE_KEY) ?? 0);
+            const soundRaw = sys.localStorage.getItem(SOUND_KEY);
+            this.soundEnabled = soundRaw === null ? true : soundRaw === '1';
+        } catch (error) {
+            this.highScore = 0;
+            this.soundEnabled = true;
+            console.warn('[SnookerGame] 读取本地存档失败，已使用默认值。', error);
+        }
     }
 
     private savePersistentData(): void {
-        sys.localStorage.setItem(HIGH_SCORE_KEY, `${this.highScore}`);
-        sys.localStorage.setItem(SOUND_KEY, this.soundEnabled ? '1' : '0');
+        try {
+            sys.localStorage.setItem(HIGH_SCORE_KEY, `${this.highScore}`);
+            sys.localStorage.setItem(SOUND_KEY, this.soundEnabled ? '1' : '0');
+        } catch (error) {
+            console.warn('[SnookerGame] 保存本地存档失败。', error);
+        }
     }
 
     private buildSceneGraph(): void {
@@ -151,157 +230,470 @@ export class SnookerGame extends Component {
         this.buildOverlayLayer();
     }
 
+    private preloadTextures(): void {
+        TextureSkinner.preload([
+            'textures/ui/backdrop',
+            'textures/ui/top_strip',
+            'textures/ui/panel_dark',
+            'textures/ui/panel_inset',
+            'textures/ui/button_blue',
+            'textures/ui/button_green',
+            'textures/ui/button_neutral',
+            'textures/ui/button_red',
+            'textures/table/wood_frame',
+            'textures/table/felt',
+            'textures/table/pocket',
+        ]);
+    }
+
+    private showFatalError(error: unknown): void {
+        console.error('[SnookerGame] 启动失败。', error);
+        this.node.removeAllChildren();
+        UiFactory.createRoundRect(this.node, 'FatalBackground', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), new Color(11, 14, 12, 255));
+        UiFactory.createLabel(this.node, 'FatalTitle', '启动失败', 38, v3(0, 72, 0), new Color(255, 240, 240, 255), 460, 60);
+        UiFactory.createLabel(
+            this.node,
+            'FatalMessage',
+            `初始化阶段发生异常，请查看 Creator 控制台。\n${error instanceof Error ? error.message : String(error)}`,
+            22,
+            v3(0, -8, 0),
+            new Color(220, 222, 227, 255),
+            920,
+            140,
+        );
+    }
+
     private buildBackground(): void {
-        UiFactory.createRoundRect(this.node, 'Background', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), new Color(17, 17, 20, 255));
-        const glowNode = new Node('BackdropGlow');
-        glowNode.layer = Layers.Enum.UI_2D;
-        this.node.addChild(glowNode);
-        glowNode.setPosition(0, 0, 0);
-        glowNode.addComponent(UITransform).setContentSize(DESIGN_SIZE);
-        const graphics = glowNode.addComponent(Graphics);
-        graphics.fillColor = new Color(34, 58, 40, 180);
-        graphics.roundRect(-420, -200, 840, 400, 48);
-        graphics.fill();
-        UiFactory.createRoundRect(this.node, 'TopStrip', new Size(1180, 88), v3(0, 296, 0), new Color(28, 28, 31, 220), new Color(137, 100, 44, 255), 18);
+        const backdrop = UiFactory.ensureNode(this.node, 'BackdropLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        backdrop.removeAllChildren();
+        const backdropBase = UiFactory.createRoundRect(backdrop, 'BackdropBase', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), SnookerTheme.background.base);
+        TextureSkinner.apply(backdropBase, 'textures/ui/backdrop', { disableGraphics: true });
+
+        const vignetteNode = UiFactory.ensureNode(backdrop, 'BackdropVignette', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        const vignetteGraphics = vignetteNode.getComponent(Graphics) ?? vignetteNode.addComponent(Graphics);
+        vignetteGraphics.clear();
+        vignetteGraphics.fillColor = SnookerTheme.background.vignette;
+        vignetteGraphics.roundRect(-DESIGN_SIZE.width / 2, -DESIGN_SIZE.height / 2, DESIGN_SIZE.width, DESIGN_SIZE.height, 56);
+        vignetteGraphics.fill();
+
+        const topGlow = UiFactory.ensureNode(backdrop, 'BackdropTopGlow', v3(0, 232, 0), 980, 220);
+        const topGlowGraphics = topGlow.getComponent(Graphics) ?? topGlow.addComponent(Graphics);
+        topGlowGraphics.clear();
+        topGlowGraphics.fillColor = withAlpha(SnookerTheme.text.accent, 18);
+        topGlowGraphics.roundRect(-490, -110, 980, 220, 110);
+        topGlowGraphics.fill();
+
+        const stageGlow = UiFactory.ensureNode(backdrop, 'BackdropStageGlow', v3(0, -20, 0), 1140, 560);
+        const stageGlowGraphics = stageGlow.getComponent(Graphics) ?? stageGlow.addComponent(Graphics);
+        stageGlowGraphics.clear();
+        stageGlowGraphics.fillColor = SnookerTheme.background.stageGlow;
+        stageGlowGraphics.roundRect(-570, -280, 1140, 560, 96);
+        stageGlowGraphics.fill();
+
+        const bottomGlow = UiFactory.ensureNode(backdrop, 'BackdropBottomGlow', v3(0, -286, 0), 1040, 160);
+        const bottomGlowGraphics = bottomGlow.getComponent(Graphics) ?? bottomGlow.addComponent(Graphics);
+        bottomGlowGraphics.clear();
+        bottomGlowGraphics.fillColor = withAlpha(SnookerTheme.table.woodHighlight, 22);
+        bottomGlowGraphics.roundRect(-520, -80, 1040, 160, 68);
+        bottomGlowGraphics.fill();
+
+        backdrop.setSiblingIndex(0);
     }
 
     private buildMenuLayer(): void {
-        this.menuLayer = new Node('MenuLayer');
-        this.menuLayer.layer = Layers.Enum.UI_2D;
-        this.node.addChild(this.menuLayer);
-        this.menuLayer.addComponent(UITransform).setContentSize(DESIGN_SIZE);
+        this.menuLayer = UiFactory.ensureNode(this.node, 'MenuLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        this.menuLayer.removeAllChildren();
 
-        const title = UiFactory.createLabel(this.menuLayer, 'Title', 'Snooker Break', 42, v3(0, 225, 0), new Color(250, 245, 233, 255), 520, 70);
-        UiFactory.createLabel(this.menuLayer, 'Subtitle', '简洁休闲风，拖拽瞄准，松手击球，兼容鼠标与触屏。', 20, v3(0, 182, 0), new Color(205, 208, 214, 255), 700, 40);
+        const titleZone = UiFactory.createRoundRect(this.menuLayer, 'TitleZone', new Size(930, 112), v3(0, 258, 0), withAlpha(SnookerTheme.metal.darkSoft, 168), withAlpha(SnookerTheme.metal.frameBright, 92), 34);
+        this.decorateLitePanel(titleZone, new Size(930, 112), 34, withAlpha(SnookerTheme.metal.darkSoft, 168), withAlpha(SnookerTheme.metal.frameBright, 92));
+        this.applyTopStripSkin(titleZone);
+        const title = UiFactory.createLabel(titleZone, 'Title', 'SNOOKER BREAK', 58, v3(0, 18, 0), SnookerTheme.text.primary, 760, 64);
+        title.lineHeight = 62;
+        UiFactory.createLabel(titleZone, 'Subtitle', '街机球房的轻高级质感，聚焦选关、瞄准、蓄力与爽快进球。', 20, v3(0, -24, 0), SnookerTheme.text.secondary, 760, 32);
 
-        const previewTable = UiFactory.createRoundRect(this.menuLayer, 'PreviewTable', new Size(660, 270), v3(210, -10, 0), new Color(92, 52, 23, 255), new Color(188, 148, 79, 255), 28);
-        const felt = UiFactory.createRoundRect(previewTable, 'PreviewFelt', new Size(596, 206), v3(0, 0, 0), new Color(44, 136, 67, 255), undefined, 18);
-        for (const pocket of [v2(-298, 103), v2(0, 103), v2(298, 103), v2(-298, -103), v2(0, -103), v2(298, -103)]) {
-            UiFactory.createCircle(felt, `PreviewPocket-${pocket.x}-${pocket.y}`, 18, pocket, new Color(20, 18, 18, 255));
+        const soundChip = this.createButton(this.menuLayer, '', v3(504, 258, 0), new Size(152, 46), 'blue', () => this.toggleSound());
+        this.soundButtonLabel = this.mustFindNode(soundChip, 'ButtonLabel').getComponent(Label)!;
+        this.soundButtonLabel.fontSize = 18;
+
+        const levelCard = UiFactory.createRoundRect(this.menuLayer, 'LevelCard', new Size(388, 402), v3(-330, -8, 0), withAlpha(SnookerTheme.metal.dark, 210), withAlpha(SnookerTheme.metal.frame, 120), 30);
+        this.decoratePanel(levelCard, new Size(388, 402), 30, withAlpha(SnookerTheme.metal.dark, 210), withAlpha(SnookerTheme.metal.frameBright, 108));
+        this.applyDarkPanelSkin(levelCard);
+        UiFactory.createLabel(levelCard, 'LevelTag', '精选关卡', 18, v3(-98, 156, 0), SnookerTheme.text.accent, 120, 28);
+        this.menuDifficultyLabel = UiFactory.createLabel(levelCard, 'DifficultyLabel', '', 18, v3(100, 156, 0), SnookerTheme.text.primary, 128, 30);
+        this.menuLevelNumberLabel = UiFactory.createLabel(levelCard, 'LevelNumber', '01', 88, v3(-110, 78, 0), SnookerTheme.text.accent, 180, 96);
+        this.menuLevelLabel = UiFactory.createLabel(levelCard, 'LevelTitle', '', 32, v3(48, 86, 0), SnookerTheme.text.primary, 182, 46);
+        this.menuDetailLabel = UiFactory.createLabel(levelCard, 'LevelDetail', '', 18, v3(0, 28, 0), SnookerTheme.text.secondary, 308, 90);
+
+        this.menuTargetLabel = this.createStatChip(levelCard, 'TargetChip', v3(-96, -54, 0), '目标分数');
+        this.menuShotLimitLabel = this.createStatChip(levelCard, 'ShotChip', v3(98, -54, 0), '推荐杆数');
+        this.menuHighScoreLabel = this.createStatChip(levelCard, 'BestChip', v3(0, -120, 0), '最佳成绩');
+
+        const thumbShell = UiFactory.createRoundRect(levelCard, 'LayoutThumbShell', new Size(312, 106), v3(0, -176, 0), withAlpha(SnookerTheme.metal.darkSoft, 200), withAlpha(SnookerTheme.metal.frame, 90), 22);
+        this.decorateInsetPlate(thumbShell, new Size(312, 106), 22, withAlpha(SnookerTheme.metal.darkSoft, 200), withAlpha(SnookerTheme.metal.frameBright, 80));
+        this.applyInsetPanelSkin(thumbShell);
+        UiFactory.createLabel(thumbShell, 'ThumbTitle', '关卡布局预览', 16, v3(-82, 34, 0), SnookerTheme.text.secondary, 120, 24);
+        const thumbTable = UiFactory.createRoundRect(thumbShell, 'LayoutThumbTable', new Size(256, 58), v3(0, -8, 0), SnookerTheme.table.woodMid, SnookerTheme.table.brass, 18);
+        this.decorateWoodShell(thumbTable, new Size(256, 58), 18);
+        this.applyWoodSkin(thumbTable);
+        const thumbFelt = UiFactory.createRoundRect(thumbTable, 'LayoutThumbFelt', new Size(228, 34), v3(0, 0, 0), SnookerTheme.table.felt, SnookerTheme.table.feltLight, 12);
+        this.decorateFeltSurface(thumbFelt, new Size(228, 34), 12);
+        this.applyFeltSkin(thumbFelt);
+        this.menuThumbnailBallLayer = UiFactory.ensureNode(thumbFelt, 'ThumbnailBallLayer', v3(0, 0, 0), 228, 34);
+
+        const previewCard = UiFactory.createRoundRect(this.menuLayer, 'PreviewCard', new Size(680, 388), v3(198, -2, 0), withAlpha(SnookerTheme.metal.dark, 160), withAlpha(SnookerTheme.metal.frame, 92), 34);
+        this.decorateLitePanel(previewCard, new Size(680, 388), 34, withAlpha(SnookerTheme.metal.dark, 160), withAlpha(SnookerTheme.metal.frameBright, 92));
+        this.applyDarkPanelSkin(previewCard);
+        UiFactory.createLabel(previewCard, 'PreviewTag', '球桌预览', 18, v3(-256, 156, 0), SnookerTheme.text.accent, 120, 24);
+        UiFactory.createLabel(previewCard, 'PreviewGuide', '左侧选关后，右侧桌面会同步展示这关的落子关系。', 18, v3(-30, 156, 0), SnookerTheme.text.secondary, 400, 24);
+
+        const previewTable = UiFactory.createRoundRect(previewCard, 'PreviewTable', new Size(620, 288), v3(0, -12, 0), SnookerTheme.table.woodMid, SnookerTheme.table.brass, 34);
+        this.decorateWoodShell(previewTable, new Size(620, 288), 34);
+        this.applyWoodSkin(previewTable);
+        const previewFelt = UiFactory.createRoundRect(previewTable, 'PreviewFelt', new Size(560, 226), v3(0, 0, 0), SnookerTheme.table.felt, SnookerTheme.table.feltLight, 22);
+        this.decorateFeltSurface(previewFelt, new Size(560, 226), 22);
+        this.applyFeltSkin(previewFelt);
+        const previewHalo = UiFactory.ensureNode(previewFelt, 'PreviewHalo', v3(0, 0, 0), 520, 190);
+        const previewHaloGraphics = previewHalo.getComponent(Graphics) ?? previewHalo.addComponent(Graphics);
+        previewHaloGraphics.clear();
+        previewHaloGraphics.fillColor = withAlpha(SnookerTheme.text.accent, 18);
+        previewHaloGraphics.roundRect(-260, -95, 520, 190, 90);
+        previewHaloGraphics.fill();
+        const haloOpacity = previewHalo.getComponent(UIOpacity) ?? previewHalo.addComponent(UIOpacity);
+        haloOpacity.opacity = 110;
+        tween(haloOpacity)
+            .repeatForever(
+                tween(haloOpacity)
+                    .to(1.5, { opacity: 156 })
+                    .to(1.3, { opacity: 96 }),
+            )
+            .start();
+
+        for (const pocket of [v2(-280, 113), v2(0, 113), v2(280, 113), v2(-280, -113), v2(0, -113), v2(280, -113)]) {
+            const pocketNode = UiFactory.createCircle(previewFelt, `PreviewPocket-${pocket.x}-${pocket.y}`, 17, pocket, SnookerTheme.table.pocket);
+            this.applyPocketSkin(pocketNode);
+            this.drawCircleStroke(pocketNode, 16.5, SnookerTheme.table.pocketLip, 3);
         }
-        [
-            { position: v2(-150, 0), color: BALL_COLORS[BallType.Cue] },
-            { position: v2(-40, 0), color: BALL_COLORS[BallType.Red] },
-            { position: v2(-10, 16), color: BALL_COLORS[BallType.Red] },
-            { position: v2(-10, -16), color: BALL_COLORS[BallType.Red] },
-            { position: v2(115, 0), color: BALL_COLORS[BallType.Blue] },
-            { position: v2(220, -10), color: BALL_COLORS[BallType.Yellow] },
-            { position: v2(270, -10), color: BALL_COLORS[BallType.Black] },
-        ].forEach((ball, index) => UiFactory.createCircle(felt, `PreviewBall-${index}`, 12, ball.position, ball.color));
+        this.menuPreviewBallLayer = UiFactory.ensureNode(previewFelt, 'PreviewBallLayer', v3(0, 0, 0), 560, 226);
 
-        const leftPanel = UiFactory.createRoundRect(this.menuLayer, 'LeftPanel', new Size(360, 360), v3(-340, -12, 0), new Color(29, 29, 32, 225), new Color(118, 90, 44, 255), 26);
-        this.menuLevelLabel = UiFactory.createLabel(leftPanel, 'MenuLevelLabel', '', 24, v3(0, 112, 0), new Color(250, 245, 233, 255), 280, 42);
-        this.menuDetailLabel = UiFactory.createLabel(leftPanel, 'MenuDetailLabel', '', 18, v3(0, 44, 0), new Color(205, 208, 214, 255), 300, 110);
-        this.menuHighScoreLabel = UiFactory.createLabel(leftPanel, 'MenuHighScoreLabel', '', 18, v3(0, -40, 0), new Color(240, 198, 52, 255), 280, 40);
-        this.createButton(leftPanel, '上一关', v3(-86, -112, 0), new Size(116, 46), new Color(59, 59, 64, 255), () => this.selectLevel(-1));
-        this.createButton(leftPanel, '下一关', v3(86, -112, 0), new Size(116, 46), new Color(59, 59, 64, 255), () => this.selectLevel(1));
-        this.createButton(leftPanel, '开始闯关', v3(0, -176, 0), new Size(250, 56), new Color(44, 146, 58, 255), () => this.startLevelMode());
-        this.createButton(this.menuLayer, '练习模式', v3(-205, -244, 0), new Size(180, 56), new Color(40, 118, 165, 255), () => this.startPracticeMode());
-        const soundButton = this.createButton(this.menuLayer, '', v3(0, -244, 0), new Size(180, 56), new Color(78, 61, 35, 255), () => this.toggleSound());
-        this.soundButtonLabel = soundButton.getChildByName('ButtonLabel')!.getComponent(Label)!;
-        this.createButton(this.menuLayer, '重新开始', v3(205, -244, 0), new Size(180, 56), new Color(137, 68, 47, 255), () => this.startLevelMode());
+        const previousButton = this.createButton(this.menuLayer, '上一关', v3(-470, -250, 0), new Size(174, 72), 'neutral', () => this.selectLevel(-1));
+        const nextButton = this.createButton(this.menuLayer, '下一关', v3(-258, -250, 0), new Size(174, 72), 'neutral', () => this.selectLevel(1));
+        this.emphasizeSecondaryButton(previousButton);
+        this.emphasizeSecondaryButton(nextButton);
+
+        this.menuStartButton = this.createButton(this.menuLayer, '开始闯关', v3(112, -250, 0), new Size(296, 76), 'green', () => this.startLevelMode());
+        this.createButton(this.menuLayer, '练习模式', v3(396, -250, 0), new Size(220, 76), 'blue', () => this.startPracticeMode());
+        this.createButton(this.menuLayer, '规则说明', v3(556, -250, 0), new Size(150, 60), 'neutral', () => this.showRuleOverlay());
+        this.startMenuPulse();
         this.refreshMenuPreview();
     }
 
     private buildGameLayer(): void {
-        this.gameLayer = new Node('GameLayer');
-        this.gameLayer.layer = Layers.Enum.UI_2D;
-        this.node.addChild(this.gameLayer);
-        this.gameLayer.addComponent(UITransform).setContentSize(DESIGN_SIZE);
+        this.gameLayer = UiFactory.ensureNode(this.node, 'GameLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        this.gameLayer.removeAllChildren();
 
-        this.tableRoot = new Node('TableRoot');
-        this.tableRoot.layer = Layers.Enum.UI_2D;
-        this.gameLayer.addChild(this.tableRoot);
-        this.tableRoot.setPosition(TABLE_CENTER.x, TABLE_CENTER.y, 0);
-        this.tableRoot.addComponent(UITransform).setContentSize(TABLE_OUTER_WIDTH, TABLE_OUTER_HEIGHT);
+        this.tableRoot = UiFactory.ensureNode(this.gameLayer, 'TableRoot', this.tableBasePosition, TABLE_OUTER_WIDTH, TABLE_OUTER_HEIGHT);
+        this.tableRoot.removeAllChildren();
         this.buildTableVisuals();
 
-        this.touchLayer = new Node('TouchLayer');
-        this.touchLayer.layer = Layers.Enum.UI_2D;
-        this.gameLayer.addChild(this.touchLayer);
-        this.touchLayer.addComponent(UITransform).setContentSize(DESIGN_SIZE);
-        this.touchLayer.addComponent(UIOpacity).opacity = 1;
+        this.topHud = UiFactory.ensureNode(this.gameLayer, 'TopHud', this.topHudBasePosition, 1160, 74);
+        this.topHud.removeAllChildren();
+        this.buildTopHud();
 
-        const topHud = UiFactory.createRoundRect(this.gameLayer, 'TopHud', new Size(1160, 82), v3(0, 296, 0), new Color(25, 25, 28, 235), new Color(147, 110, 54, 255), 18);
-        const scoreTitle = UiFactory.createLabel(topHud, 'ScoreTitle', '得分', 18, v3(-450, 18, 0), new Color(210, 212, 220, 255), 120, 28);
-        scoreTitle.horizontalAlign = Label.HorizontalAlign.LEFT;
-        this.scoreLabel = UiFactory.createLabel(topHud, 'ScoreLabel', '0', 30, v3(-450, -16, 0), Color.WHITE, 120, 36);
-        this.scoreLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
-        const breakTitle = UiFactory.createLabel(topHud, 'BreakTitle', 'BREAK', 18, v3(-70, 18, 0), new Color(210, 212, 220, 255), 140, 28);
-        this.breakLabel = UiFactory.createLabel(topHud, 'BreakLabel', '0', 30, v3(-70, -16, 0), new Color(240, 198, 52, 255), 140, 36);
-        this.stageLabel = UiFactory.createLabel(topHud, 'StageLabel', '', 22, v3(120, 0, 0), Color.WHITE, 260, 40);
-        this.shotsLabel = UiFactory.createLabel(topHud, 'ShotsLabel', '', 20, v3(360, 0, 0), new Color(215, 216, 220, 255), 180, 40);
-        this.createButton(topHud, '暂停', v3(500, 0, 0), new Size(92, 42), new Color(95, 74, 38, 255), () => this.togglePause());
-        this.createButton(topHud, '重开', v3(390, 0, 0), new Size(92, 42), new Color(67, 67, 72, 255), () => this.restartCurrentMatch());
-        this.createButton(topHud, '主页', v3(280, 0, 0), new Size(92, 42), new Color(67, 67, 72, 255), () => this.showMenu());
+        this.bottomHud = UiFactory.ensureNode(this.gameLayer, 'BottomHud', this.bottomHudBasePosition, 1160, 92);
+        this.bottomHud.removeAllChildren();
+        this.buildBottomHud();
 
-        const bottomHud = UiFactory.createRoundRect(this.gameLayer, 'BottomHud', new Size(1120, 96), v3(0, -300, 0), new Color(25, 25, 28, 235), new Color(147, 110, 54, 255), 18);
-        UiFactory.createLabel(bottomHud, 'PowerTitle', '力度', 18, v3(-440, 22, 0), new Color(210, 212, 220, 255), 80, 26);
-        const powerBarBg = UiFactory.createRoundRect(bottomHud, 'PowerBarBg', new Size(330, 24), v3(-230, -2, 0), new Color(49, 49, 54, 255), new Color(110, 110, 118, 255), 12);
-        const powerFill = new Node('PowerFill');
-        powerFill.layer = Layers.Enum.UI_2D;
-        powerBarBg.addChild(powerFill);
-        powerFill.addComponent(UITransform).setContentSize(320, 18);
-        this.powerFillGraphics = powerFill.addComponent(Graphics);
-        this.powerValueLabel = UiFactory.createLabel(bottomHud, 'PowerValue', '0%', 18, v3(-40, -2, 0), new Color(240, 198, 52, 255), 80, 28);
-        this.statusLabel = UiFactory.createLabel(bottomHud, 'StatusLabel', '拖动白球后方蓄力，松手击球。', 18, v3(250, -2, 0), new Color(225, 226, 231, 255), 520, 40);
+        this.battleReportNode = UiFactory.createRoundRect(this.gameLayer, 'BattleReport', new Size(428, 54), this.battleReportBasePosition, withAlpha(SnookerTheme.metal.darkSoft, 220), withAlpha(SnookerTheme.metal.frameBright, 110), 22);
+        this.decorateLitePanel(this.battleReportNode, new Size(428, 54), 22, withAlpha(SnookerTheme.metal.darkSoft, 220), withAlpha(SnookerTheme.metal.frameBright, 110));
+        this.applyTopStripSkin(this.battleReportNode);
+        this.battleReportNode.active = false;
+        this.battleReportOpacity = this.battleReportNode.getComponent(UIOpacity) ?? this.battleReportNode.addComponent(UIOpacity);
+        this.battleReportOpacity.opacity = 0;
+        const battleLabel = UiFactory.createLabel(this.battleReportNode, 'BattleReportLabel', '', 18, v3(0, 0, 0), SnookerTheme.text.primary, 392, 34);
+        battleLabel.lineHeight = 22;
+
+        this.touchLayer = UiFactory.ensureNode(this.gameLayer, 'TouchLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        (this.touchLayer.getComponent(UIOpacity) ?? this.touchLayer.addComponent(UIOpacity)).opacity = 1;
+        this.touchLayer.setSiblingIndex(this.gameLayer.children.length - 1);
 
         this.gameLayer.active = false;
         this.renderPowerBar(0);
+        this.updatePowerDescriptor(0);
+        this.updateGameplayPresentation();
+    }
+
+    private buildTopHud(): void {
+        const shell = UiFactory.createRoundRect(this.topHud, 'TopHudShell', new Size(1148, 72), v3(0, 0, 0), withAlpha(SnookerTheme.metal.darkSoft, 160), withAlpha(SnookerTheme.metal.frameBright, 80), 28);
+        this.decorateLitePanel(shell, new Size(1148, 72), 28, withAlpha(SnookerTheme.metal.darkSoft, 160), withAlpha(SnookerTheme.metal.frameBright, 80));
+        this.applyTopStripSkin(shell);
+
+        const playerCard = UiFactory.createRoundRect(this.topHud, 'PlayerCard', new Size(300, 62), v3(-396, 0, 0), withAlpha(SnookerTheme.metal.dark, 186), withAlpha(SnookerTheme.metal.frame, 80), 22);
+        this.decorateInsetPlate(playerCard, new Size(300, 62), 22, withAlpha(SnookerTheme.metal.dark, 186), withAlpha(SnookerTheme.metal.frameBright, 90));
+        this.applyDarkPanelSkin(playerCard);
+        this.createHudBadge(playerCard, 'PlayerBadge', v3(-112, 0, 0), 'P1', SnookerTheme.text.primary, SnookerTheme.button.blue);
+        const scoreTitle = UiFactory.createLabel(playerCard, 'ScoreTitle', '玩家得分', 15, v3(6, 12, 0), SnookerTheme.text.secondary, 150, 20);
+        scoreTitle.horizontalAlign = Label.HorizontalAlign.LEFT;
+        this.scoreLabel = UiFactory.createLabel(playerCard, 'ScoreLabel', '0', 34, v3(-8, -12, 0), SnookerTheme.text.primary, 130, 36);
+        this.scoreLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+
+        const breakPill = UiFactory.createRoundRect(playerCard, 'BreakPill', new Size(102, 34), v3(92, 0, 0), withAlpha(SnookerTheme.metal.darkSoft, 220), withAlpha(SnookerTheme.metal.frameBright, 64), 17);
+        this.decorateInsetPlate(breakPill, new Size(102, 34), 17, withAlpha(SnookerTheme.metal.darkSoft, 220), withAlpha(SnookerTheme.metal.frameBright, 60));
+        this.applyInsetPanelSkin(breakPill);
+        UiFactory.createLabel(breakPill, 'BreakTag', 'BREAK', 13, v3(-16, 0, 0), SnookerTheme.text.secondary, 50, 18);
+        this.breakLabel = UiFactory.createLabel(breakPill, 'BreakValue', '0', 18, v3(26, 0, 0), SnookerTheme.text.accent, 36, 20);
+
+        const progressCard = UiFactory.createRoundRect(this.topHud, 'ProgressCard', new Size(424, 62), v3(24, 0, 0), withAlpha(SnookerTheme.metal.dark, 176), withAlpha(SnookerTheme.metal.frame, 74), 22);
+        this.decorateInsetPlate(progressCard, new Size(424, 62), 22, withAlpha(SnookerTheme.metal.dark, 176), withAlpha(SnookerTheme.metal.frameBright, 84));
+        this.applyDarkPanelSkin(progressCard);
+        this.stageLabel = UiFactory.createLabel(progressCard, 'StageLabel', '', 24, v3(0, 15, 0), SnookerTheme.text.primary, 300, 26);
+        this.shotsLabel = UiFactory.createLabel(progressCard, 'ShotsLabel', '', 18, v3(0, -6, 0), SnookerTheme.text.accent, 360, 22);
+        this.targetHintLabel = UiFactory.createLabel(progressCard, 'TargetHintLabel', '', 16, v3(0, -26, 0), SnookerTheme.text.secondary, 360, 20);
+
+        this.createButton(this.topHud, '重开本局', v3(396, 0, 0), new Size(148, 54), 'red', () => this.restartCurrentMatch());
+        this.createButton(this.topHud, '长按暂停', v3(532, 0, 0), new Size(132, 54), 'blue', () => this.togglePause(), { holdDurationMs: 300 });
+    }
+
+    private buildBottomHud(): void {
+        const shell = UiFactory.createRoundRect(this.bottomHud, 'BottomHudShell', new Size(1148, 88), v3(0, 0, 0), withAlpha(SnookerTheme.metal.darkSoft, 158), withAlpha(SnookerTheme.metal.frameBright, 76), 28);
+        this.decorateLitePanel(shell, new Size(1148, 88), 28, withAlpha(SnookerTheme.metal.darkSoft, 158), withAlpha(SnookerTheme.metal.frameBright, 76));
+        this.applyTopStripSkin(shell);
+
+        const powerCard = UiFactory.createRoundRect(this.bottomHud, 'PowerCard', new Size(392, 62), v3(-336, 0, 0), withAlpha(SnookerTheme.metal.dark, 184), withAlpha(SnookerTheme.metal.frame, 70), 22);
+        this.decorateInsetPlate(powerCard, new Size(392, 62), 22, withAlpha(SnookerTheme.metal.dark, 184), withAlpha(SnookerTheme.metal.frameBright, 80));
+        this.applyDarkPanelSkin(powerCard);
+        UiFactory.createLabel(powerCard, 'PowerTitle', '力度', 18, v3(-152, 0, 0), SnookerTheme.text.primary, 70, 24);
+        const powerBarBg = UiFactory.createRoundRect(powerCard, 'PowerBarBg', new Size(308, 24), v3(16, -4, 0), new Color(20, 24, 24, 255), withAlpha(SnookerTheme.metal.frameBright, 64), 12);
+        this.decoratePowerBar(powerBarBg, new Size(308, 24));
+        this.applyInsetPanelSkin(powerBarBg, 24);
+        const powerFill = UiFactory.ensureNode(powerBarBg, 'PowerFill', v3(0, 0, 0), this.powerFillWidth, 18);
+        this.powerFillGraphics = powerFill.getComponent(Graphics) ?? powerFill.addComponent(Graphics);
+        this.powerValueLabel = UiFactory.createLabel(powerCard, 'PowerValue', '0%', 19, v3(150, 16, 0), SnookerTheme.text.accent, 84, 22);
+        this.powerBandLabel = UiFactory.createLabel(powerCard, 'PowerBand', '轻推', 17, v3(152, -18, 0), SnookerTheme.text.secondary, 84, 22);
+
+        const statusCard = UiFactory.createRoundRect(this.bottomHud, 'StatusCard', new Size(448, 62), v3(80, 0, 0), withAlpha(SnookerTheme.metal.dark, 184), withAlpha(SnookerTheme.metal.frame, 70), 22);
+        this.decorateInsetPlate(statusCard, new Size(448, 62), 22, withAlpha(SnookerTheme.metal.dark, 184), withAlpha(SnookerTheme.metal.frameBright, 80));
+        this.applyDarkPanelSkin(statusCard);
+        UiFactory.createLabel(statusCard, 'StatusTitle', '当前提示', 17, v3(-158, 0, 0), SnookerTheme.text.accent, 92, 22);
+        this.statusLabel = UiFactory.createLabel(statusCard, 'StatusLabel', '拖动白球后方开始瞄准。', 18, v3(28, 0, 0), SnookerTheme.text.primary, 296, 40);
+
+        this.helperButton = this.createButton(this.bottomHud, '辅助线：开', v3(468, 0, 0), new Size(170, 54), 'blue', () => this.toggleHelperAim());
+        this.helperButtonLabel = this.mustFindNode(this.helperButton, 'ButtonLabel').getComponent(Label)!;
     }
 
     private buildTableVisuals(): void {
-        const outer = UiFactory.createRoundRect(this.tableRoot, 'TableOuter', new Size(TABLE_OUTER_WIDTH, TABLE_OUTER_HEIGHT), v3(0, 0, 0), new Color(101, 54, 25, 255), new Color(193, 156, 82, 255), 36);
-        const felt = UiFactory.createRoundRect(outer, 'TableFelt', new Size(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT), v3(0, 0, 0), new Color(36, 137, 66, 255), undefined, 24);
-        const midLineNode = new Node('MidLine');
-        midLineNode.layer = Layers.Enum.UI_2D;
-        felt.addChild(midLineNode);
-        midLineNode.addComponent(UITransform).setContentSize(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
-        const midGraphics = midLineNode.addComponent(Graphics);
-        midGraphics.strokeColor = new Color(255, 255, 255, 30);
-        midGraphics.lineWidth = 2;
-        midGraphics.moveTo(-TABLE_INNER_WIDTH / 2 + 190, -TABLE_INNER_HEIGHT / 2 + 20);
-        midGraphics.lineTo(-TABLE_INNER_WIDTH / 2 + 190, TABLE_INNER_HEIGHT / 2 - 20);
-        midGraphics.stroke();
+        this.pocketGlowNodes = [];
+        const outer = UiFactory.createRoundRect(this.tableRoot, 'TableOuter', new Size(TABLE_OUTER_WIDTH, TABLE_OUTER_HEIGHT), v3(0, 0, 0), SnookerTheme.table.woodMid, SnookerTheme.table.brass, 38);
+        this.decorateWoodShell(outer, new Size(TABLE_OUTER_WIDTH, TABLE_OUTER_HEIGHT), 38);
+        this.applyWoodSkin(outer);
+        const felt = UiFactory.createRoundRect(outer, 'TableFelt', new Size(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT), v3(0, 0, 0), SnookerTheme.table.felt, SnookerTheme.table.feltLight, 24);
+        this.decorateFeltSurface(felt, new Size(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT), 24);
+        this.applyFeltSkin(felt);
+
+        const guideNode = UiFactory.ensureNode(felt, 'TableGuideLines', v3(0, 0, 0), TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
+        const guideGraphics = guideNode.getComponent(Graphics) ?? guideNode.addComponent(Graphics);
+        guideGraphics.clear();
+        guideGraphics.strokeColor = SnookerTheme.table.guideLine;
+        guideGraphics.lineWidth = 2;
+        guideGraphics.moveTo(-TABLE_INNER_WIDTH / 2 + 190, -TABLE_INNER_HEIGHT / 2 + 20);
+        guideGraphics.lineTo(-TABLE_INNER_WIDTH / 2 + 190, TABLE_INNER_HEIGHT / 2 - 20);
+        guideGraphics.stroke();
+        guideGraphics.circle(-TABLE_INNER_WIDTH / 2 + 190, 0, 78);
+        guideGraphics.stroke();
+
         for (let index = 0; index < POCKET_POSITIONS.length; index++) {
-            UiFactory.createCircle(felt, `Pocket-${index}`, 22, POCKET_POSITIONS[index], new Color(18, 16, 17, 255));
+            const pocket = UiFactory.createCircle(felt, `Pocket-${index}`, 22, POCKET_POSITIONS[index], SnookerTheme.table.pocket);
+            this.applyPocketSkin(pocket);
+            this.drawCircleStroke(pocket, 21, SnookerTheme.table.pocketLip, 4);
+            const pocketGlow = UiFactory.createCircle(pocket, 'PocketGlow', 26, v2(0, 0), withAlpha(SnookerTheme.text.accent, 32), 0);
+            pocketGlow.setScale(1.34, 1.34, 1);
+            this.pocketGlowNodes.push(pocketGlow);
         }
-        this.tableBallLayer = new Node('BallLayer');
-        this.tableBallLayer.layer = Layers.Enum.UI_2D;
-        felt.addChild(this.tableBallLayer);
-        this.tableBallLayer.addComponent(UITransform).setContentSize(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
-        const aimNode = new Node('AimGraphics');
-        aimNode.layer = Layers.Enum.UI_2D;
-        felt.addChild(aimNode);
-        aimNode.addComponent(UITransform).setContentSize(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
-        this.aimGraphics = aimNode.addComponent(Graphics);
-        const cueNode = new Node('CueGraphics');
-        cueNode.layer = Layers.Enum.UI_2D;
-        felt.addChild(cueNode);
-        cueNode.addComponent(UITransform).setContentSize(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
-        this.cueGraphics = cueNode.addComponent(Graphics);
-        this.fxLayer = new Node('FxLayer');
-        this.fxLayer.layer = Layers.Enum.UI_2D;
-        felt.addChild(this.fxLayer);
-        this.fxLayer.addComponent(UITransform).setContentSize(TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
+
+        this.tableBallLayer = UiFactory.ensureNode(felt, 'BallLayer', v3(0, 0, 0), TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
+        const aimNode = UiFactory.ensureNode(felt, 'AimGraphics', v3(0, 0, 0), TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
+        this.aimGraphics = aimNode.getComponent(Graphics) ?? aimNode.addComponent(Graphics);
+        const cueNode = UiFactory.ensureNode(felt, 'CueGraphics', v3(0, 0, 0), TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
+        this.cueGraphics = cueNode.getComponent(Graphics) ?? cueNode.addComponent(Graphics);
+        this.fxLayer = UiFactory.ensureNode(felt, 'FxLayer', v3(0, 0, 0), TABLE_INNER_WIDTH, TABLE_INNER_HEIGHT);
     }
 
     private buildOverlayLayer(): void {
-        this.overlayLayer = new Node('OverlayLayer');
-        this.overlayLayer.layer = Layers.Enum.UI_2D;
-        this.node.addChild(this.overlayLayer);
-        this.overlayLayer.addComponent(UITransform).setContentSize(DESIGN_SIZE);
-        const mask = UiFactory.createRoundRect(this.overlayLayer, 'OverlayMask', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), new Color(0, 0, 0, 200));
-        mask.getComponent(UIOpacity)!.opacity = 180;
-        const panel = UiFactory.createRoundRect(this.overlayLayer, 'OverlayPanel', new Size(520, 300), v3(0, 10, 0), new Color(30, 30, 34, 245), new Color(150, 115, 54, 255), 26);
-        this.overlayTitleLabel = UiFactory.createLabel(panel, 'OverlayTitle', '', 34, v3(0, 92, 0), Color.WHITE, 360, 56);
-        this.overlayDetailLabel = UiFactory.createLabel(panel, 'OverlayDetail', '', 20, v3(0, 20, 0), new Color(220, 222, 227, 255), 400, 120);
-        this.overlayResumeButton = this.createButton(panel, '继续游戏', v3(0, -28, 0), new Size(220, 48), new Color(52, 126, 187, 255), () => {
-            this.togglePause();
-        });
-        this.createButton(panel, '再来一局', v3(-110, -92, 0), new Size(180, 52), new Color(44, 146, 58, 255), () => this.restartCurrentMatch());
-        this.createButton(panel, '返回主页', v3(110, -92, 0), new Size(180, 52), new Color(75, 75, 80, 255), () => this.showMenu());
+        this.overlayLayer = UiFactory.ensureNode(this.node, 'OverlayLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        this.overlayLayer.removeAllChildren();
+        const mask = UiFactory.createRoundRect(this.overlayLayer, 'OverlayMask', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), withAlpha(SnookerTheme.background.vignette, 220));
+        mask.getComponent(UIOpacity)!.opacity = 210;
+        const panel = UiFactory.createRoundRect(this.overlayLayer, 'OverlayPanel', new Size(590, 352), v3(0, 8, 0), withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110), 30);
+        this.decoratePanel(panel, new Size(590, 352), 30, withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110));
+        this.applyDarkPanelSkin(panel);
+        this.overlayTitleLabel = UiFactory.createLabel(panel, 'OverlayTitle', '', 36, v3(0, 112, 0), SnookerTheme.text.primary, 460, 50);
+        this.overlayDetailLabel = UiFactory.createLabel(panel, 'OverlayDetail', '', 20, v3(0, 28, 0), SnookerTheme.text.secondary, 470, 136);
+
+        this.overlayPrimaryButton = this.createButton(panel, '继续游戏', v3(0, -38, 0), new Size(236, 54), 'blue', () => this.overlayPrimaryAction?.());
+        this.overlayPrimaryLabel = this.mustFindNode(this.overlayPrimaryButton, 'ButtonLabel').getComponent(Label)!;
+
+        this.overlaySecondaryButton = this.createButton(panel, '再来一局', v3(-130, -112, 0), new Size(202, 56), 'green', () => this.overlaySecondaryAction?.());
+        this.overlaySecondaryLabel = this.mustFindNode(this.overlaySecondaryButton, 'ButtonLabel').getComponent(Label)!;
+
+        this.overlayTertiaryButton = this.createButton(panel, '返回主页', v3(130, -112, 0), new Size(202, 56), 'neutral', () => this.overlayTertiaryAction?.());
+        this.overlayTertiaryLabel = this.mustFindNode(this.overlayTertiaryButton, 'ButtonLabel').getComponent(Label)!;
         this.overlayLayer.active = false;
+    }
+
+    private decoratePanel(node: Node, size: Size, radius: number, fillColor: Color, frameColor: Color): void {
+        if (node.getComponent(Sprite)) {
+            return;
+        }
+        UiFactory.createRoundRect(node, 'PanelShadow', new Size(size.width + 12, size.height + 12), v3(0, -5, 0), withAlpha(SnookerTheme.metal.shadow, 110), undefined, radius + 6, 170);
+        UiFactory.createRoundRect(node, 'PanelInner', new Size(size.width - 14, size.height - 14), v3(0, 0, 0), shiftColor(fillColor, 6), withAlpha(frameColor, 90), Math.max(10, radius - 8));
+        const glossNode = UiFactory.ensureNode(node, 'PanelGloss', v3(0, size.height * 0.18, 0), size.width - 34, Math.max(18, size.height * 0.2));
+        const glossGraphics = glossNode.getComponent(Graphics) ?? glossNode.addComponent(Graphics);
+        glossGraphics.clear();
+        glossGraphics.fillColor = SnookerTheme.metal.glass;
+        glossGraphics.roundRect(-(size.width - 34) / 2, -Math.max(18, size.height * 0.2) / 2, size.width - 34, Math.max(18, size.height * 0.2), Math.max(10, radius - 12));
+        glossGraphics.fill();
+    }
+
+    private decorateLitePanel(node: Node, size: Size, radius: number, fillColor: Color, frameColor: Color): void {
+        if (node.getComponent(Sprite)) {
+            return;
+        }
+        UiFactory.createRoundRect(node, 'LiteShadow', new Size(size.width + 8, size.height + 8), v3(0, -4, 0), withAlpha(SnookerTheme.metal.shadow, 72), undefined, radius + 4, 100);
+        UiFactory.createRoundRect(node, 'LiteInner', new Size(size.width - 12, size.height - 12), v3(0, 0, 0), shiftColor(fillColor, 4), withAlpha(frameColor, 58), Math.max(8, radius - 8));
+    }
+
+    private decorateInsetPlate(node: Node, size: Size, radius: number, fillColor: Color, frameColor: Color): void {
+        if (node.getComponent(Sprite)) {
+            return;
+        }
+        UiFactory.createRoundRect(node, 'InsetShadow', new Size(size.width + 8, size.height + 8), v3(0, -3, 0), withAlpha(SnookerTheme.metal.shadow, 84), undefined, radius + 4, 120);
+        UiFactory.createRoundRect(node, 'InsetCore', new Size(size.width - 10, size.height - 10), v3(0, 0, 0), shiftColor(fillColor, 8), withAlpha(frameColor, 76), Math.max(8, radius - 5));
+        const shineNode = UiFactory.ensureNode(node, 'InsetShine', v3(0, size.height * 0.16, 0), size.width - 24, Math.max(12, size.height * 0.22));
+        const shineGraphics = shineNode.getComponent(Graphics) ?? shineNode.addComponent(Graphics);
+        shineGraphics.clear();
+        shineGraphics.fillColor = withAlpha(Color.WHITE, 14);
+        shineGraphics.roundRect(-(size.width - 24) / 2, -Math.max(12, size.height * 0.22) / 2, size.width - 24, Math.max(12, size.height * 0.22), Math.max(8, radius - 8));
+        shineGraphics.fill();
+    }
+
+    private decorateButton(node: Node, size: Size, fillColor: Color): void {
+        if (node.getComponent(Sprite)) {
+            return;
+        }
+        UiFactory.createRoundRect(node, 'ButtonInner', new Size(size.width - 10, size.height - 10), v3(0, 0, 0), shiftColor(fillColor, 18), withAlpha(Color.WHITE, 36), 14);
+        UiFactory.createRoundRect(node, 'ButtonCap', new Size(size.width - 20, Math.max(10, size.height * 0.26)), v3(0, size.height * 0.18, 0), withAlpha(Color.WHITE, 20), undefined, 10, 110);
+    }
+
+    private decorateWoodShell(node: Node, size: Size, radius: number): void {
+        if (node.getComponent(Sprite)) {
+            return;
+        }
+        UiFactory.createRoundRect(node, 'WoodShadow', new Size(size.width + 18, size.height + 18), v3(0, -10, 0), withAlpha(SnookerTheme.metal.shadow, 128), undefined, radius + 8, 166);
+        UiFactory.createRoundRect(node, 'WoodTrim', new Size(size.width - 24, size.height - 24), v3(0, 0, 0), SnookerTheme.table.woodDark, SnookerTheme.table.brassShadow, Math.max(16, radius - 10));
+        UiFactory.createRoundRect(node, 'WoodHighlight', new Size(size.width - 42, 26), v3(0, size.height * 0.34, 0), withAlpha(SnookerTheme.table.woodHighlight, 98), undefined, 13, 150);
+    }
+
+    private decorateFeltSurface(node: Node, size: Size, radius: number): void {
+        if (node.getComponent(Sprite)) {
+            return;
+        }
+        UiFactory.createRoundRect(node, 'FeltInset', new Size(size.width - 12, size.height - 12), v3(0, 0, 0), SnookerTheme.table.feltShade, undefined, Math.max(10, radius - 6), 92);
+
+        const stripeNode = UiFactory.ensureNode(node, 'FeltStripe', v3(0, 0, 0), size.width - 30, size.height - 30);
+        const stripeGraphics = stripeNode.getComponent(Graphics) ?? stripeNode.addComponent(Graphics);
+        stripeGraphics.clear();
+        stripeGraphics.fillColor = withAlpha(Color.WHITE, 8);
+        for (let x = -Math.floor((size.width - 40) / 2); x <= Math.floor((size.width - 40) / 2); x += 28) {
+            stripeGraphics.roundRect(x, -(size.height - 34) / 2, 14, size.height - 34, 6);
+            stripeGraphics.fill();
+        }
+
+        const glowNode = UiFactory.ensureNode(node, 'FeltGlow', v3(0, 0, 0), size.width - 40, size.height - 46);
+        const glowGraphics = glowNode.getComponent(Graphics) ?? glowNode.addComponent(Graphics);
+        glowGraphics.clear();
+        glowGraphics.fillColor = SnookerTheme.table.feltLight;
+        glowGraphics.roundRect(-(size.width - 40) / 2, -(size.height - 46) / 2, size.width - 40, size.height - 46, Math.max(12, radius - 12));
+        glowGraphics.fill();
+    }
+
+    private decoratePowerBar(node: Node, size: Size): void {
+        const innerWidth = size.width - 18;
+        const trackNode = UiFactory.ensureNode(node, 'PowerTrack', v3(0, 0, 0), innerWidth, size.height - 8);
+        trackNode.setSiblingIndex(0);
+        const trackGraphics = trackNode.getComponent(Graphics) ?? trackNode.addComponent(Graphics);
+        const left = -innerWidth / 2;
+        trackGraphics.clear();
+        trackGraphics.fillColor = SnookerTheme.text.success;
+        trackGraphics.roundRect(left, -8, innerWidth * 0.42, 16, 8);
+        trackGraphics.fill();
+        trackGraphics.fillColor = SnookerTheme.text.accent;
+        trackGraphics.roundRect(left + innerWidth * 0.38, -8, innerWidth * 0.28, 16, 8);
+        trackGraphics.fill();
+        trackGraphics.fillColor = SnookerTheme.text.danger;
+        trackGraphics.roundRect(left + innerWidth * 0.64, -8, innerWidth * 0.36, 16, 8);
+        trackGraphics.fill();
+        trackGraphics.fillColor = withAlpha(Color.WHITE, 22);
+        trackGraphics.roundRect(left, -8, innerWidth, 6, 6);
+        trackGraphics.fill();
+    }
+
+    private createHudBadge(parent: Node, name: string, position: ReturnType<typeof v3>, text: string, textColor: Color, fillColor: Color): void {
+        const badge = UiFactory.createCircle(parent, name, 28, position, shiftColor(fillColor, 8));
+        this.drawCircleStroke(badge, 27, SnookerTheme.metal.frameBright, 3);
+        UiFactory.createCircle(badge, `${name}-inner`, 20, v2(0, 0), shiftColor(fillColor, 20), 220);
+        UiFactory.createLabel(badge, `${name}-label`, text, 18, v3(0, 0, 0), textColor, 40, 24);
+    }
+
+    private createStatChip(parent: Node, name: string, position: Vec3, title: string): Label {
+        const chip = UiFactory.createRoundRect(parent, name, new Size(160, 52), position, withAlpha(SnookerTheme.metal.darkSoft, 208), withAlpha(SnookerTheme.metal.frameBright, 64), 18);
+        this.decorateInsetPlate(chip, new Size(160, 52), 18, withAlpha(SnookerTheme.metal.darkSoft, 208), withAlpha(SnookerTheme.metal.frameBright, 64));
+        this.applyInsetPanelSkin(chip);
+        UiFactory.createLabel(chip, `${name}Title`, title, 14, v3(0, 12, 0), SnookerTheme.text.secondary, 130, 18);
+        return UiFactory.createLabel(chip, `${name}Value`, '', 20, v3(0, -10, 0), SnookerTheme.text.primary, 130, 22);
+    }
+
+    private applyTopStripSkin(node: Node): void {
+        TextureSkinner.apply(node, 'textures/ui/top_strip', { sliced: true, insetLeft: 40, insetRight: 40, insetTop: 28, insetBottom: 28 });
+    }
+
+    private applyDarkPanelSkin(node: Node): void {
+        TextureSkinner.apply(node, 'textures/ui/panel_dark', { sliced: true, insetLeft: 34, insetRight: 34, insetTop: 34, insetBottom: 34 });
+    }
+
+    private applyInsetPanelSkin(node: Node, inset = 28): void {
+        TextureSkinner.apply(node, 'textures/ui/panel_inset', { sliced: true, insetLeft: inset, insetRight: inset, insetTop: inset, insetBottom: inset });
+    }
+
+    private applyButtonSkin(node: Node, style: ButtonStyle): void {
+        const path = style === 'blue'
+            ? 'textures/ui/button_blue'
+            : style === 'green'
+                ? 'textures/ui/button_green'
+                : style === 'red'
+                    ? 'textures/ui/button_red'
+                    : 'textures/ui/button_neutral';
+        TextureSkinner.apply(node, path, { sliced: true, insetLeft: 34, insetRight: 34, insetTop: 30, insetBottom: 30 });
+    }
+
+    private applyWoodSkin(node: Node): void {
+        TextureSkinner.apply(node, 'textures/table/wood_frame', { sliced: true, insetLeft: 90, insetRight: 90, insetTop: 90, insetBottom: 90 });
+    }
+
+    private applyFeltSkin(node: Node): void {
+        TextureSkinner.apply(node, 'textures/table/felt', { disableGraphics: true });
+    }
+
+    private applyPocketSkin(node: Node): void {
+        TextureSkinner.apply(node, 'textures/table/pocket', { disableGraphics: true });
+    }
+
+    private drawCircleStroke(node: Node, radius: number, strokeColor: Color, lineWidth: number): void {
+        const strokeNode = UiFactory.ensureNode(node, 'CircleStroke', v3(0, 0, 0), radius * 2 + lineWidth * 2, radius * 2 + lineWidth * 2);
+        const strokeGraphics = strokeNode.getComponent(Graphics) ?? strokeNode.addComponent(Graphics);
+        strokeGraphics.clear();
+        strokeGraphics.strokeColor = strokeColor;
+        strokeGraphics.lineWidth = lineWidth;
+        strokeGraphics.circle(0, 0, radius);
+        strokeGraphics.stroke();
     }
 
     private bindPointerInput(): void {
@@ -313,27 +705,228 @@ export class SnookerGame extends Component {
         });
     }
 
-    private createButton(parent: Node, text: string, position: Vec2 | ReturnType<typeof v3>, size: Size, fillColor: Color, onClick: () => void): Node {
-        const button = UiFactory.createRoundRect(parent, `Button-${text}`, size, position, fillColor, new Color(230, 230, 235, 40), 14);
-        const label = UiFactory.createLabel(button, 'ButtonLabel', text, 20, v3(0, 0, 0), Color.WHITE, size.width - 24, size.height - 8);
-        const handler = () => onClick();
+    private createButton(parent: Node, text: string, position: Vec2 | Vec3, size: Size, style: ButtonStyle, onClick: () => void, options?: ButtonOptions): Node {
+        const fillColor = this.getButtonFillColor(style);
+        const button = UiFactory.createRoundRect(parent, `Button-${text}`, size, position, fillColor, shiftColor(fillColor, 42), 18);
+        this.applySceneButtonSkin(button, style);
+        this.decorateButton(button, size, fillColor);
+        this.applyButtonSkin(button, style);
+        UiFactory.createLabel(button, 'ButtonLabel', text, 21, v3(0, 0, 0), SnookerTheme.text.primary, size.width - 24, size.height - 8);
+
+        let holdTimer: ReturnType<typeof setTimeout> | null = null;
+        let holdTriggered = false;
+        const clearHoldTimer = () => {
+            if (holdTimer !== null) {
+                clearTimeout(holdTimer);
+                holdTimer = null;
+            }
+        };
+        const pressIn = () => {
+            this.setButtonPressed(button, true);
+            if (!options?.holdDurationMs) {
+                return;
+            }
+            holdTriggered = false;
+            clearHoldTimer();
+            holdTimer = setTimeout(() => {
+                holdTriggered = true;
+                this.setButtonPressed(button, false);
+                onClick();
+            }, options.holdDurationMs);
+        };
+        const handler = () => {
+            clearHoldTimer();
+            this.setButtonPressed(button, false);
+            if (options?.holdDurationMs) {
+                holdTriggered = false;
+                return;
+            }
+            onClick();
+        };
+        const pressOut = () => {
+            clearHoldTimer();
+            holdTriggered = false;
+            this.setButtonPressed(button, false);
+        };
+        button.on(Node.EventType.TOUCH_START, pressIn, this);
         button.on(Node.EventType.TOUCH_END, handler, this);
+        button.on(Node.EventType.TOUCH_CANCEL, pressOut, this);
+        button.on(Node.EventType.MOUSE_DOWN, pressIn, this);
         button.on(Node.EventType.MOUSE_UP, handler, this);
+        button.on(Node.EventType.MOUSE_LEAVE, pressOut, this);
         return button;
+    }
+
+    private setButtonPressed(button: Node, pressed: boolean): void {
+        Tween.stopAllByTarget(button);
+        tween(button).to(0.08, { scale: pressed ? v3(0.97, 0.97, 1) : v3(1, 1, 1) }).start();
+    }
+
+    private emphasizeSecondaryButton(button: Node): void {
+        const opacity = button.getComponent(UIOpacity) ?? button.addComponent(UIOpacity);
+        opacity.opacity = 232;
+    }
+
+    private mustFindNode(root: Node, name: string): Node {
+        if (root.name === name) {
+            return root;
+        }
+        for (const child of root.children) {
+            const found = this.findNodeRecursive(child, name);
+            if (found) {
+                return found;
+            }
+        }
+        throw new Error(`未找到节点: ${name}`);
+    }
+
+    private findNodeRecursive(node: Node, name: string): Node | null {
+        if (node.name === name) {
+            return node;
+        }
+        for (const child of node.children) {
+            const found = this.findNodeRecursive(child, name);
+            if (found) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private applySceneButtonSkin(button: Node, style: ButtonStyle): void {
+        const sprite = button.getComponent(Sprite);
+        if (!sprite) {
+            return;
+        }
+        sprite.color = style === 'red'
+            ? withAlpha(SnookerTheme.button.danger, 255)
+            : style === 'green'
+                ? withAlpha(SnookerTheme.button.green, 255)
+                : style === 'blue'
+                    ? withAlpha(SnookerTheme.button.blue, 255)
+                    : withAlpha(SnookerTheme.button.neutral, 255);
+    }
+
+    private getButtonFillColor(style: ButtonStyle): Color {
+        switch (style) {
+            case 'blue':
+                return SnookerTheme.button.blue;
+            case 'green':
+                return SnookerTheme.button.green;
+            case 'red':
+                return SnookerTheme.button.danger;
+            case 'neutral':
+            default:
+                return SnookerTheme.button.neutral;
+        }
+    }
+
+    private restyleButton(button: Node, label: Label, text: string, style: ButtonStyle): void {
+        const transform = button.getComponent(UITransform);
+        const position = button.position.clone();
+        if (transform) {
+            const size = new Size(transform.contentSize.width, transform.contentSize.height);
+            const fillColor = this.getButtonFillColor(style);
+            UiFactory.createRoundRect(button.parent!, button.name, size, position, fillColor, shiftColor(fillColor, 42), 18);
+            this.decorateButton(button, size, fillColor);
+        }
+        label.string = text;
+        this.applySceneButtonSkin(button, style);
     }
 
     private selectLevel(offset: number): void {
         const total = LEVEL_CONFIGS.length;
         this.selectedLevelIndex = (this.selectedLevelIndex + offset + total) % total;
-        this.refreshMenuPreview();
+        this.refreshMenuPreview(true);
     }
 
-    private refreshMenuPreview(): void {
+    private refreshMenuPreview(animate = false): void {
         const config = LEVEL_CONFIGS[this.selectedLevelIndex];
+        const difficulty = this.getDifficultySpec(this.selectedLevelIndex);
+        this.menuLevelNumberLabel.string = `${config.id}`.padStart(2, '0');
         this.menuLevelLabel.string = config.name;
-        this.menuDetailLabel.string = `${config.description}\n目标分数：${config.targetScore}\n推荐杆数：${config.shotLimit}`;
-        this.menuHighScoreLabel.string = `本地最高分：${this.highScore}`;
-        this.soundButtonLabel.string = this.soundEnabled ? '音效：开启' : '音效：关闭';
+        this.menuDifficultyLabel.string = difficulty.label;
+        this.menuDifficultyLabel.color = difficulty.color;
+        this.menuDetailLabel.string = config.description;
+        this.menuTargetLabel.string = `${config.targetScore} 分`;
+        this.menuShotLimitLabel.string = `${config.shotLimit} 杆`;
+        this.menuHighScoreLabel.string = `${this.highScore} 分`;
+        this.soundButtonLabel.string = this.soundEnabled ? '音效 开' : '音效 关';
+
+        this.rebuildPreviewBalls(this.menuPreviewBallLayer, config.ballLayouts, 560, 226, BALL_RADIUS * 0.82, true);
+        this.rebuildPreviewBalls(this.menuThumbnailBallLayer, config.ballLayouts, 228, 34, 4.4, false);
+
+        if (animate) {
+            this.playPreviewSwapAnimation();
+        }
+    }
+
+    private rebuildPreviewBalls(container: Node, layouts: BallLayout[], previewWidth: number, previewHeight: number, radius: number, includeCueBall: boolean): void {
+        container.removeAllChildren();
+        if (includeCueBall) {
+            this.createDecorativeBall(container, 'PreviewCueBall', radius, this.mapTableToPreview(CUE_START_POSITION, previewWidth, previewHeight), BALL_COLORS[BallType.Cue], true);
+        }
+        layouts.forEach((layout, index) => {
+            this.createDecorativeBall(
+                container,
+                `PreviewBall-${index}`,
+                radius,
+                this.mapTableToPreview(layout.position, previewWidth, previewHeight),
+                BALL_COLORS[layout.ballType],
+                previewHeight > 40,
+            );
+        });
+    }
+
+    private createDecorativeBall(parent: Node, name: string, radius: number, position: Vec2, color: Color, withShadow: boolean): void {
+        if (withShadow) {
+            const shadow = UiFactory.createCircle(parent, `${name}-shadow`, radius, position.clone().add(v2(radius * 0.32, -radius * 0.3)), SnookerTheme.ball.shadow, 116);
+            shadow.setScale(1.14, 0.82, 1);
+        }
+        const ballNode = UiFactory.createCircle(parent, name, radius, position, color);
+        const bodyGlow = UiFactory.createCircle(ballNode, `${name}-body-glow`, radius * 0.82, v2(0, 0), withAlpha(shiftColor(color, 18), 110), 120);
+        bodyGlow.setScale(0.88, 0.78, 1);
+        const highlight = UiFactory.createCircle(ballNode, `${name}-highlight`, radius * 0.36, v2(-radius * 0.3, radius * 0.32), SnookerTheme.ball.highlight, 160);
+        highlight.setScale(0.94, 0.8, 1);
+        UiFactory.createCircle(ballNode, `${name}-spark`, radius * 0.14, v2(-radius * 0.08, radius * 0.08), SnookerTheme.ball.sparkle, 220);
+        this.drawCircleStroke(ballNode, Math.max(2, radius - 0.8), withAlpha(Color.WHITE, 64), Math.max(1.1, radius * 0.1));
+    }
+
+    private playPreviewSwapAnimation(): void {
+        Tween.stopAllByTarget(this.menuPreviewBallLayer);
+        Tween.stopAllByTarget(this.menuThumbnailBallLayer);
+        Tween.stopAllByTarget(this.menuLevelNumberLabel.node);
+
+        this.menuPreviewBallLayer.setScale(0.96, 0.96, 1);
+        const previewOpacity = this.menuPreviewBallLayer.getComponent(UIOpacity) ?? this.menuPreviewBallLayer.addComponent(UIOpacity);
+        previewOpacity.opacity = 0;
+        tween(previewOpacity).to(0.18, { opacity: 255 }).start();
+        tween(this.menuPreviewBallLayer).to(0.24, { scale: v3(1, 1, 1) }).start();
+
+        this.menuThumbnailBallLayer.setScale(0.9, 0.9, 1);
+        const thumbOpacity = this.menuThumbnailBallLayer.getComponent(UIOpacity) ?? this.menuThumbnailBallLayer.addComponent(UIOpacity);
+        thumbOpacity.opacity = 0;
+        tween(thumbOpacity).to(0.16, { opacity: 255 }).start();
+        tween(this.menuThumbnailBallLayer).to(0.22, { scale: v3(1, 1, 1) }).start();
+
+        this.menuLevelNumberLabel.node.setScale(1, 0.82, 1);
+        tween(this.menuLevelNumberLabel.node).to(0.2, { scale: v3(1, 1, 1) }).start();
+    }
+
+    private mapTableToPreview(position: Vec2, previewWidth: number, previewHeight: number): Vec2 {
+        const x = (position.x / (TABLE_INNER_WIDTH / 2)) * (previewWidth / 2 - 16);
+        const y = (position.y / (TABLE_INNER_HEIGHT / 2)) * (previewHeight / 2 - 12);
+        return v2(x, y);
+    }
+
+    private getDifficultySpec(levelIndex: number): { label: string; color: Color } {
+        if (levelIndex <= 2) {
+            return { label: '新手', color: SnookerTheme.text.success };
+        }
+        if (levelIndex <= 6) {
+            return { label: '标准', color: SnookerTheme.text.accent };
+        }
+        return { label: '进阶', color: SnookerTheme.text.info };
     }
 
     private toggleSound(): void {
@@ -364,12 +957,14 @@ export class SnookerGame extends Component {
         this.syncBallVisuals();
         this.clearAimGuides();
         this.renderPowerBar(0);
+        this.updatePowerDescriptor(0);
+        this.hideOverlay();
         this.menuLayer.active = false;
         this.gameLayer.active = true;
-        this.overlayLayer.active = false;
         this.phase = PlayPhase.Idle;
-        this.statusLabel.string = '拖动白球后方蓄力，松手击球。';
+        this.statusLabel.string = '拖动白球后方开始瞄准。';
         this.refreshHud();
+        this.updateGameplayPresentation();
     }
 
     private restartCurrentMatch(): void {
@@ -384,9 +979,10 @@ export class SnookerGame extends Component {
         this.phase = PlayPhase.Menu;
         this.menuLayer.active = true;
         this.gameLayer.active = false;
-        this.overlayLayer.active = false;
+        this.hideOverlay();
         this.clearAimGuides();
         this.refreshMenuPreview();
+        this.updateGameplayPresentation();
     }
 
     private togglePause(): void {
@@ -395,17 +991,86 @@ export class SnookerGame extends Component {
         }
         if (this.phase === PlayPhase.Paused) {
             this.phase = this.resumePhase;
-            this.overlayLayer.active = false;
-            this.statusLabel.string = '继续游戏，拖动白球后方蓄力。';
+            this.hideOverlay();
+            this.statusLabel.string = '继续瞄准或等待走位结束。';
+            this.updateGameplayPresentation();
             return;
         }
         this.resumePhase = this.phase === PlayPhase.Aiming ? PlayPhase.Idle : this.phase;
         this.cancelAim();
         this.phase = PlayPhase.Paused;
-        this.overlayTitleLabel.string = '已暂停';
-        this.overlayDetailLabel.string = '你可以继续当前球局，或者直接返回主页。';
-        this.overlayResumeButton.active = true;
+        this.updateGameplayPresentation();
+        this.showOverlay(
+            '已暂停',
+            '继续即可回到球桌；若想重新组织节奏，也可以直接重开这一局。',
+            { label: '继续游戏', style: 'blue', action: () => this.togglePause() },
+            { label: '重开本局', style: 'red', action: () => this.restartCurrentMatch() },
+            { label: '返回主页', style: 'neutral', action: () => this.showMenu() },
+        );
+    }
+
+    private showRuleOverlay(): void {
+        this.showOverlay(
+            '上手说明',
+            '1. 先选关，再点击开始闯关。\n2. 按住白球后方向后拖动，方向即出杆方向，拖得越远力度越大。\n3. 进球可累计 BREAK，白球落袋会被判犯规。\n4. 闯关模式需要在杆数限制内达到目标分数。',
+            { label: '知道了', style: 'blue', action: () => this.hideOverlay() },
+        );
+    }
+
+    private showOverlay(
+        title: string,
+        detail: string,
+        primary?: OverlayButtonConfig,
+        secondary?: OverlayButtonConfig,
+        tertiary?: OverlayButtonConfig,
+    ): void {
+        this.overlayTitleLabel.string = title;
+        this.overlayDetailLabel.string = detail;
+        this.setOverlayButton(this.overlayPrimaryButton, this.overlayPrimaryLabel, primary, (action) => {
+            this.overlayPrimaryAction = action;
+        });
+        this.setOverlayButton(this.overlaySecondaryButton, this.overlaySecondaryLabel, secondary, (action) => {
+            this.overlaySecondaryAction = action;
+        });
+        this.setOverlayButton(this.overlayTertiaryButton, this.overlayTertiaryLabel, tertiary, (action) => {
+            this.overlayTertiaryAction = action;
+        });
         this.overlayLayer.active = true;
+    }
+
+    private setOverlayButton(
+        button: Node,
+        label: Label,
+        config: OverlayButtonConfig | undefined,
+        setter: (action: (() => void) | null) => void,
+    ): void {
+        if (!config) {
+            button.active = false;
+            setter(null);
+            return;
+        }
+        button.active = true;
+        setter(config.action);
+        this.restyleButton(button, label, config.label, config.style);
+    }
+
+    private hideOverlay(): void {
+        this.overlayLayer.active = false;
+        this.overlayPrimaryAction = null;
+        this.overlaySecondaryAction = null;
+        this.overlayTertiaryAction = null;
+        this.updateGameplayPresentation();
+    }
+
+    private startMenuPulse(): void {
+        Tween.stopAllByTarget(this.menuStartButton);
+        tween(this.menuStartButton)
+            .repeatForever(
+                tween(this.menuStartButton)
+                    .to(0.92, { scale: v3(1.03, 1.03, 1) })
+                    .to(0.92, { scale: v3(1, 1, 1) }),
+            )
+            .start();
     }
 
     private spawnMatchBalls(): void {
@@ -416,10 +1081,15 @@ export class SnookerGame extends Component {
     }
 
     private createBall(ballType: BallType, position: Vec2, id: string): void {
-        const shadowNode = UiFactory.createCircle(this.tableBallLayer, `${id}-shadow`, BALL_RADIUS, position.clone().add(v2(4, -4)), new Color(0, 0, 0, 80), 120);
+        const shadowNode = UiFactory.createCircle(this.tableBallLayer, `${id}-shadow`, BALL_RADIUS, position.clone().add(v2(5, -5)), SnookerTheme.ball.shadow, 132);
+        shadowNode.setScale(1.18, 0.82, 1);
         const ballNode = UiFactory.createCircle(this.tableBallLayer, id, BALL_RADIUS, position, BALL_COLORS[ballType]);
-        const highlight = UiFactory.createCircle(ballNode, `${id}-highlight`, BALL_RADIUS * 0.35, v2(-BALL_RADIUS * 0.34, BALL_RADIUS * 0.32), new Color(255, 255, 255, 110), 160);
+        const bodyGlow = UiFactory.createCircle(ballNode, `${id}-body-glow`, BALL_RADIUS * 0.82, v2(0, 0), withAlpha(shiftColor(BALL_COLORS[ballType], 22), 110), 120);
+        bodyGlow.setScale(0.86, 0.78, 1);
+        const highlight = UiFactory.createCircle(ballNode, `${id}-highlight`, BALL_RADIUS * 0.35, v2(-BALL_RADIUS * 0.34, BALL_RADIUS * 0.32), SnookerTheme.ball.highlight, 180);
         highlight.setScale(0.92, 0.8, 1);
+        UiFactory.createCircle(ballNode, `${id}-spark`, BALL_RADIUS * 0.14, v2(-BALL_RADIUS * 0.1, BALL_RADIUS * 0.1), SnookerTheme.ball.sparkle, 220);
+        this.drawCircleStroke(ballNode, BALL_RADIUS - 1, withAlpha(Color.WHITE, 78), 1.8);
         this.balls.push({
             id,
             ballType,
@@ -445,12 +1115,39 @@ export class SnookerGame extends Component {
     private refreshHud(): void {
         this.scoreLabel.string = `${this.score}`;
         this.breakLabel.string = `${this.currentBreak}`;
-        this.stageLabel.string = this.mode === MatchMode.Practice ? '练习模式' : LEVEL_CONFIGS[this.selectedLevelIndex].name;
         if (this.mode === MatchMode.Practice) {
-            this.shotsLabel.string = `已出杆 ${this.shotsUsed}`;
+            const remainingBalls = this.balls.filter((ball) => !ball.isPotted && ball.ballType !== BallType.Cue).length;
+            this.stageLabel.string = '练习模式';
+            this.shotsLabel.string = `已出杆 ${this.shotsUsed} · 已进球 ${this.pottedCount}`;
+            this.targetHintLabel.string = remainingBalls > 0 ? `清台还剩 ${remainingBalls} 颗目标球` : '球桌已清空，准备结算。';
         } else {
-            const leftShots = Math.max(0, LEVEL_CONFIGS[this.selectedLevelIndex].shotLimit - this.shotsUsed);
-            this.shotsLabel.string = `剩余杆数 ${leftShots}`;
+            const config = LEVEL_CONFIGS[this.selectedLevelIndex];
+            const leftShots = Math.max(0, config.shotLimit - this.shotsUsed);
+            const remainingScore = Math.max(0, config.targetScore - this.score);
+            this.stageLabel.string = config.name;
+            this.shotsLabel.string = `本杆得分 ${this.currentBreak} · 目标 ${config.targetScore}`;
+            this.targetHintLabel.string = remainingScore > 0 ? `距离目标还差 ${remainingScore} 分 · 剩余 ${leftShots} 杆` : `目标已达成，清完球桌即可收官。`;
+        }
+        this.updateHelperButton();
+        this.updateGameplayPresentation();
+    }
+
+    private updateHelperButton(): void {
+        this.restyleButton(this.helperButton, this.helperButtonLabel, this.helperAimEnabled ? '辅助线：开' : '辅助线：关', this.helperAimEnabled ? 'blue' : 'neutral');
+    }
+
+    private toggleHelperAim(): void {
+        this.helperAimEnabled = !this.helperAimEnabled;
+        this.updateHelperButton();
+        if (!this.helperAimEnabled) {
+            this.aimGraphics.clear();
+            if (this.phase === PlayPhase.Aiming) {
+                this.statusLabel.string = '辅助线已关闭，仍可继续拖动瞄准。';
+            }
+            return;
+        }
+        if (this.phase === PlayPhase.Aiming) {
+            this.statusLabel.string = '辅助线已开启，命中预测已恢复。';
         }
     }
 
@@ -470,6 +1167,8 @@ export class SnookerGame extends Component {
             return;
         }
         this.phase = PlayPhase.Aiming;
+        this.statusLabel.string = '拖动白球后方开始瞄准。';
+        this.updateGameplayPresentation();
         this.updateAimGuides(localOnTable);
     }
 
@@ -493,7 +1192,8 @@ export class SnookerGame extends Component {
         }
         this.clearAimGuides();
         this.renderPowerBar(0);
-        this.powerValueLabel.string = '0%';
+        this.updatePowerDescriptor(0);
+        this.updateGameplayPresentation();
     }
 
     private shootCueBall(pointerOnTable: Vec2): void {
@@ -516,10 +1216,12 @@ export class SnookerGame extends Component {
         this.shotsUsed += 1;
         this.pottedThisShot = [];
         this.renderPowerBar(powerRatio);
-        this.powerValueLabel.string = `${Math.round(powerRatio * 100)}%`;
-        this.statusLabel.string = '球体运动中...';
+        this.updatePowerDescriptor(powerRatio);
+        this.statusLabel.string = '已出杆，观察走位与落袋反馈。';
         this.refreshHud();
         this.clearAimGuides();
+        this.updateGameplayPresentation();
+        this.shakeTable(8);
     }
 
     private onBallsPotted(pottedBalls: BallState[]): void {
@@ -527,37 +1229,83 @@ export class SnookerGame extends Component {
         for (const ball of pottedBalls) {
             ball.node.active = false;
             ball.shadowNode.active = false;
+            this.highlightNearestPocket(ball.position, ball.ballType === BallType.Cue ? SnookerTheme.text.danger : ball.color);
             if (ball.ballType !== BallType.Cue) {
                 this.pottedCount += 1;
-                this.spawnFloatingText(`+${ball.scoreValue}`, ball.position.clone(), ball.color);
+                this.spawnFloatingText(`+${ball.scoreValue}`, ball.position.clone(), ball.color, 26, 70);
             } else {
-                this.spawnFloatingText('犯规', ball.position.clone(), new Color(255, 120, 120, 255));
+                this.spawnFloatingText('犯规', ball.position.clone(), SnookerTheme.text.danger, 26, 70);
             }
         }
+        this.shakeTable(5);
     }
 
     private finishCurrentShot(): void {
         this.phase = PlayPhase.Idle;
         this.physicsAccumulator = 0;
         const resolution = this.rules.evaluateShot(this.pottedThisShot);
-        this.score = Math.max(0, this.score + resolution.scoreDelta - resolution.foulPenalty);
-        this.currentBreak = resolution.breakDelta > 0 ? this.currentBreak + resolution.breakDelta : 0;
+        const nextScore = Math.max(0, this.score + resolution.scoreDelta - resolution.foulPenalty);
+        const nextBreak = resolution.breakDelta > 0 ? this.currentBreak + resolution.breakDelta : 0;
+        const report = this.composeShotReport(resolution, nextScore);
+        this.score = nextScore;
+        this.currentBreak = nextBreak;
         if (resolution.cueBallPotted) {
             this.respotCueBall();
         }
         this.statusLabel.string = resolution.message;
+        this.showBattleReport(report.text, report.color);
         this.renderPowerBar(0);
-        this.powerValueLabel.string = '0%';
+        this.updatePowerDescriptor(0);
         if (this.score > this.highScore) {
             this.highScore = this.score;
             this.savePersistentData();
         }
         this.refreshHud();
         this.syncBallVisuals();
+        if (this.pottedThisShot.filter((ball) => ball.ballType !== BallType.Cue).length > 1 && !resolution.cueBallPotted) {
+            this.spawnFloatingText(`COMBO x${this.pottedThisShot.filter((ball) => ball.ballType !== BallType.Cue).length}`, v2(0, 48), SnookerTheme.text.accent, 28, 86);
+        }
         this.pottedThisShot = [];
+        this.updateGameplayPresentation();
         if (this.shouldSettleMatch()) {
             this.showSettlement();
         }
+    }
+
+    private composeShotReport(resolution: ShotResolution, nextScore: number): { text: string; color: Color } {
+        const objectBalls = this.pottedThisShot.filter((ball) => ball.ballType !== BallType.Cue);
+        const remainingScore = this.mode === MatchMode.Level ? Math.max(0, LEVEL_CONFIGS[this.selectedLevelIndex].targetScore - nextScore) : 0;
+        if (resolution.cueBallPotted && objectBalls.length > 0) {
+            return {
+                text: `进球 +${resolution.scoreDelta}，但白球落袋 · 还差 ${remainingScore} 分`,
+                color: SnookerTheme.text.danger,
+            };
+        }
+        if (resolution.cueBallPotted) {
+            return {
+                text: this.mode === MatchMode.Level ? `犯规：白球落袋 · 还差 ${remainingScore} 分` : '犯规：白球落袋',
+                color: SnookerTheme.text.danger,
+            };
+        }
+        if (objectBalls.length === 1) {
+            const ball = objectBalls[0];
+            const tail = this.mode === MatchMode.Level ? ` · 还差 ${remainingScore} 分` : ` · 当前总分 ${nextScore}`;
+            return {
+                text: `${this.getBallTypeLabel(ball.ballType)}入袋 +${ball.scoreValue}${tail}`,
+                color: SnookerTheme.text.accent,
+            };
+        }
+        if (objectBalls.length > 1) {
+            const tail = this.mode === MatchMode.Level ? ` · 还差 ${remainingScore} 分` : ` · 当前总分 ${nextScore}`;
+            return {
+                text: `连续进球 x${objectBalls.length} +${resolution.scoreDelta}${tail}`,
+                color: SnookerTheme.text.accent,
+            };
+        }
+        return {
+            text: this.mode === MatchMode.Level ? `本杆未进球 · 还差 ${remainingScore} 分` : '本杆未进球，准备下一杆。',
+            color: SnookerTheme.text.secondary,
+        };
     }
 
     private shouldSettleMatch(): boolean {
@@ -572,16 +1320,26 @@ export class SnookerGame extends Component {
 
     private showSettlement(): void {
         this.phase = PlayPhase.Settlement;
+        this.updateGameplayPresentation();
         const passed = this.mode === MatchMode.Practice ? true : this.score >= LEVEL_CONFIGS[this.selectedLevelIndex].targetScore;
-        this.overlayResumeButton.active = false;
-        this.overlayTitleLabel.string = this.mode === MatchMode.Practice ? '练习完成' : passed ? '闯关成功' : '本关未达标';
         if (this.mode === MatchMode.Practice) {
-            this.overlayDetailLabel.string = `本局得分：${this.score}\n进球数量：${this.pottedCount}\n出杆次数：${this.shotsUsed}\n本地最高分：${this.highScore}`;
-        } else {
-            const config = LEVEL_CONFIGS[this.selectedLevelIndex];
-            this.overlayDetailLabel.string = `本局得分：${this.score}\n目标分数：${config.targetScore}\n进球数量：${this.pottedCount}\n出杆次数：${this.shotsUsed}\n${passed ? '你已经可以继续挑战下一关。' : '可以重开再试，先稳住力度控制。'}`;
+            this.showOverlay(
+                '练习完成',
+                `本局得分：${this.score}\n进球数量：${this.pottedCount}\n出杆次数：${this.shotsUsed}\n本地最高分：${this.highScore}`,
+                undefined,
+                { label: '再来一局', style: 'green', action: () => this.restartCurrentMatch() },
+                { label: '返回主页', style: 'neutral', action: () => this.showMenu() },
+            );
+            return;
         }
-        this.overlayLayer.active = true;
+        const config = LEVEL_CONFIGS[this.selectedLevelIndex];
+        this.showOverlay(
+            passed ? '闯关成功' : '本关未达标',
+            `本局得分：${this.score}\n目标分数：${config.targetScore}\n进球数量：${this.pottedCount}\n出杆次数：${this.shotsUsed}\n${passed ? '你已经具备继续挑战下一关的手感。' : '建议重新组织走位，先稳住力度控制。'}`,
+            undefined,
+            { label: '再来一局', style: 'green', action: () => this.restartCurrentMatch() },
+            { label: '返回主页', style: 'neutral', action: () => this.showMenu() },
+        );
     }
 
     private respotCueBall(): void {
@@ -635,30 +1393,123 @@ export class SnookerGame extends Component {
         const shotVector = cueBall.position.clone().subtract(pointerOnTable);
         const powerRatio = math.clamp01(shotVector.length() / MAX_DRAG_DISTANCE);
         this.renderPowerBar(powerRatio);
-        this.powerValueLabel.string = `${Math.round(powerRatio * 100)}%`;
+        this.updatePowerDescriptor(powerRatio);
         if (shotVector.length() <= 4) {
             this.clearAimGuides();
             return;
         }
         const direction = shotVector.normalize();
-        const lineLength = 140 + powerRatio * 140;
+        const prediction = this.findCollisionPrediction(cueBall, direction);
+        this.drawCueStick(cueBall.position, direction, powerRatio);
+        if (!this.helperAimEnabled) {
+            this.statusLabel.string = `辅助线已关闭 · ${this.getPowerBandText(powerRatio)}`;
+            this.aimGraphics.clear();
+            return;
+        }
+        this.drawAimPrediction(cueBall.position, direction, powerRatio, prediction);
+        if (prediction) {
+            this.statusLabel.string = `预计命中 ${this.getBallTypeLabel(prediction.ball.ballType)} · ${this.getPowerBandText(powerRatio)}`;
+        } else {
+            this.statusLabel.string = `拖动继续调角度 · ${this.getPowerBandText(powerRatio)}`;
+        }
+    }
+
+    private findCollisionPrediction(cueBall: BallState, direction: Vec2): CollisionPrediction | null {
+        let best: CollisionPrediction | null = null;
+        const hitRadius = cueBall.radius * 2;
+        for (const ball of this.balls) {
+            if (ball.isPotted || ball.ballType === BallType.Cue) {
+                continue;
+            }
+            const toBall = ball.position.clone().subtract(cueBall.position);
+            const projected = toBall.dot(direction);
+            if (projected <= 0) {
+                continue;
+            }
+            const perpendicularSquared = toBall.lengthSqr() - projected * projected;
+            if (perpendicularSquared > hitRadius * hitRadius) {
+                continue;
+            }
+            const offset = Math.sqrt(Math.max(0, hitRadius * hitRadius - perpendicularSquared));
+            const travelDistance = projected - offset;
+            if (travelDistance <= 0) {
+                continue;
+            }
+            if (!best || travelDistance < best.travelDistance) {
+                const impactPoint = cueBall.position.clone().add(direction.clone().multiplyScalar(travelDistance));
+                const targetDirection = ball.position.clone().subtract(impactPoint).normalize();
+                best = {
+                    ball,
+                    impactPoint,
+                    travelDistance,
+                    targetDirection,
+                };
+            }
+        }
+        return best;
+    }
+
+    private drawAimPrediction(cuePosition: Vec2, direction: Vec2, powerRatio: number, prediction: CollisionPrediction | null): void {
+        const guideLength = 178 + powerRatio * 160;
         this.aimGraphics.clear();
-        this.aimGraphics.lineWidth = 4;
-        this.aimGraphics.strokeColor = new Color(255, 255, 255, 160);
-        let distance = 22;
-        while (distance < lineLength) {
-            const start = cueBall.position.clone().add(direction.clone().multiplyScalar(distance));
-            const end = cueBall.position.clone().add(direction.clone().multiplyScalar(Math.min(lineLength, distance + 16)));
-            this.aimGraphics.moveTo(start.x, start.y);
-            this.aimGraphics.lineTo(end.x, end.y);
-            distance += 26;
+        this.aimGraphics.lineWidth = 3.5;
+        this.aimGraphics.strokeColor = withAlpha(Color.WHITE, 210);
+        const start = cuePosition.clone().add(direction.clone().multiplyScalar(BALL_RADIUS + 6));
+        const end = prediction
+            ? prediction.impactPoint.clone()
+            : cuePosition.clone().add(direction.clone().multiplyScalar(guideLength));
+        this.aimGraphics.moveTo(start.x, start.y);
+        this.aimGraphics.lineTo(end.x, end.y);
+        this.aimGraphics.stroke();
+
+        this.aimGraphics.lineWidth = 2;
+        this.aimGraphics.strokeColor = withAlpha(Color.WHITE, 124);
+        let distance = 28;
+        while (distance < guideLength) {
+            const dashStart = cuePosition.clone().add(direction.clone().multiplyScalar(distance));
+            const dashEnd = cuePosition.clone().add(direction.clone().multiplyScalar(Math.min(guideLength, distance + 12)));
+            this.aimGraphics.moveTo(dashStart.x, dashStart.y);
+            this.aimGraphics.lineTo(dashEnd.x, dashEnd.y);
+            distance += 24;
         }
         this.aimGraphics.stroke();
+
+        if (!prediction) {
+            return;
+        }
+
+        this.aimGraphics.fillColor = withAlpha(SnookerTheme.text.accent, 48);
+        this.aimGraphics.circle(prediction.impactPoint.x, prediction.impactPoint.y, 10);
+        this.aimGraphics.fill();
+        this.aimGraphics.strokeColor = withAlpha(SnookerTheme.text.accent, 218);
+        this.aimGraphics.lineWidth = 2.5;
+        this.aimGraphics.circle(prediction.impactPoint.x, prediction.impactPoint.y, 14);
+        this.aimGraphics.stroke();
+
+        const projectedEnd = prediction.ball.position.clone().add(prediction.targetDirection.clone().multiplyScalar(92));
+        this.aimGraphics.strokeColor = withAlpha(prediction.ball.color, 170);
+        this.aimGraphics.lineWidth = 3;
+        this.aimGraphics.moveTo(prediction.ball.position.x, prediction.ball.position.y);
+        this.aimGraphics.lineTo(projectedEnd.x, projectedEnd.y);
+        this.aimGraphics.stroke();
+
+        this.aimGraphics.strokeColor = withAlpha(prediction.ball.color, 150);
+        this.aimGraphics.lineWidth = 2;
+        this.aimGraphics.circle(prediction.ball.position.x, prediction.ball.position.y, BALL_RADIUS + 4);
+        this.aimGraphics.stroke();
+    }
+
+    private drawCueStick(cuePosition: Vec2, direction: Vec2, powerRatio: number): void {
         this.cueGraphics.clear();
-        this.cueGraphics.lineWidth = 10;
-        this.cueGraphics.strokeColor = new Color(122, 81, 40, 240);
-        const cueStart = cueBall.position.clone().subtract(direction.clone().multiplyScalar(24));
-        const cueEnd = cueBall.position.clone().subtract(direction.clone().multiplyScalar(96 + powerRatio * 76));
+        const cueStart = cuePosition.clone().subtract(direction.clone().multiplyScalar(22));
+        const cueEnd = cuePosition.clone().subtract(direction.clone().multiplyScalar(108 + powerRatio * 88));
+        this.cueGraphics.lineWidth = 11;
+        this.cueGraphics.strokeColor = new Color(150, 103, 58, 236);
+        this.cueGraphics.moveTo(cueStart.x, cueStart.y);
+        this.cueGraphics.lineTo(cueEnd.x, cueEnd.y);
+        this.cueGraphics.stroke();
+        this.cueGraphics.lineWidth = 3;
+        this.cueGraphics.strokeColor = withAlpha(Color.WHITE, 110);
         this.cueGraphics.moveTo(cueStart.x, cueStart.y);
         this.cueGraphics.lineTo(cueEnd.x, cueEnd.y);
         this.cueGraphics.stroke();
@@ -671,23 +1522,189 @@ export class SnookerGame extends Component {
 
     private renderPowerBar(ratio: number): void {
         const clamped = math.clamp01(ratio);
-        const width = 308 * clamped;
+        const width = this.powerFillWidth * clamped;
+        const left = -this.powerFillWidth / 2;
         this.powerFillGraphics.clear();
         if (width <= 0) {
             return;
         }
-        const color = clamped < 0.45 ? new Color(71, 194, 83, 255) : clamped < 0.75 ? new Color(232, 180, 46, 255) : new Color(212, 76, 62, 255);
+        const color = clamped < 0.45 ? SnookerTheme.text.success : clamped < 0.75 ? SnookerTheme.text.accent : SnookerTheme.text.danger;
         this.powerFillGraphics.fillColor = color;
-        this.powerFillGraphics.roundRect(-154, -9, width, 18, 9);
+        this.powerFillGraphics.roundRect(left, -9, width, 18, 9);
+        this.powerFillGraphics.fill();
+        this.powerFillGraphics.fillColor = withAlpha(Color.WHITE, 32);
+        this.powerFillGraphics.roundRect(left, -9, width, 6, 6);
         this.powerFillGraphics.fill();
     }
 
-    private spawnFloatingText(text: string, tablePosition: Vec2, color: Color): void {
-        const label = UiFactory.createLabel(this.fxLayer, `Float-${Date.now()}-${Math.random()}`, text, 24, tablePosition, color, 120, 32);
+    private updatePowerDescriptor(ratio: number): void {
+        const clamped = math.clamp01(ratio);
+        this.powerValueLabel.string = `${Math.round(clamped * 100)}%`;
+        this.powerBandLabel.string = this.getPowerBandText(clamped);
+    }
+
+    private getPowerBandText(ratio: number): string {
+        if (ratio < 0.35) {
+            return '轻推';
+        }
+        if (ratio < 0.72) {
+            return '标准';
+        }
+        return '强击';
+    }
+
+    private highlightNearestPocket(position: Vec2, color: Color): void {
+        let bestIndex = 0;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (let index = 0; index < POCKET_POSITIONS.length; index++) {
+            const distance = position.clone().subtract(POCKET_POSITIONS[index]).lengthSqr();
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestIndex = index;
+            }
+        }
+        const glowNode = this.pocketGlowNodes[bestIndex];
+        if (!glowNode) {
+            return;
+        }
+        const graphics = glowNode.getComponent(Graphics) ?? glowNode.addComponent(Graphics);
+        const opacity = glowNode.getComponent(UIOpacity) ?? glowNode.addComponent(UIOpacity);
+        graphics.clear();
+        graphics.fillColor = withAlpha(color, 86);
+        graphics.circle(0, 0, 26);
+        graphics.fill();
+        glowNode.setScale(1.18, 1.18, 1);
+        opacity.opacity = 0;
+        Tween.stopAllByTarget(glowNode);
+        Tween.stopAllByTarget(opacity);
+        tween(opacity).to(0.1, { opacity: 215 }).to(0.28, { opacity: 0 }).start();
+        tween(glowNode).to(0.12, { scale: v3(1.56, 1.56, 1) }).to(0.22, { scale: v3(1.24, 1.24, 1) }).start();
+    }
+
+    private shakeTable(intensity: number): void {
+        Tween.stopAllByTarget(this.tableRoot);
+        this.tableRoot.setPosition(this.tableBasePosition);
+        tween(this.tableRoot)
+            .to(0.04, { position: v3(this.tableBasePosition.x + intensity, this.tableBasePosition.y - intensity * 0.45, 0) })
+            .to(0.04, { position: v3(this.tableBasePosition.x - intensity * 0.7, this.tableBasePosition.y + intensity * 0.36, 0) })
+            .to(0.04, { position: v3(this.tableBasePosition.x + intensity * 0.42, this.tableBasePosition.y + intensity * 0.18, 0) })
+            .to(0.05, { position: this.tableBasePosition })
+            .start();
+    }
+
+    private showBattleReport(text: string, color: Color): void {
+        const label = this.mustFindNode(this.battleReportNode, 'BattleReportLabel').getComponent(Label)!;
+        label.string = text;
+        label.color = color;
+        this.battleReportNode.active = true;
+        this.battleReportNode.setPosition(this.battleReportBasePosition);
+        this.battleReportNode.setScale(0.96, 0.96, 1);
+        this.battleReportOpacity.opacity = 0;
+        Tween.stopAllByTarget(this.battleReportNode);
+        Tween.stopAllByTarget(this.battleReportOpacity);
+        tween(this.battleReportOpacity)
+            .to(0.12, { opacity: 255 })
+            .delay(0.8)
+            .to(0.18, { opacity: 0 })
+            .start();
+        tween(this.battleReportNode)
+            .to(0.12, { scale: v3(1, 1, 1), position: v3(this.battleReportBasePosition.x, this.battleReportBasePosition.y + 8, 0) })
+            .delay(0.8)
+            .call(() => {
+                this.battleReportNode.active = false;
+            })
+            .start();
+    }
+
+    private updateGameplayPresentation(): void {
+        if (!this.gameLayer) {
+            return;
+        }
+        if (!this.gameLayer.active) {
+            this.topHud.setPosition(this.topHudBasePosition);
+            this.bottomHud.setPosition(this.bottomHudBasePosition);
+            return;
+        }
+
+        const topOpacity = this.topHud.getComponent(UIOpacity) ?? this.topHud.addComponent(UIOpacity);
+        const bottomOpacity = this.bottomHud.getComponent(UIOpacity) ?? this.bottomHud.addComponent(UIOpacity);
+        let nextTopOpacity = 255;
+        let nextBottomOpacity = 255;
+        let nextTopPosition = this.topHudBasePosition;
+        let nextBottomPosition = this.bottomHudBasePosition;
+        let helperVisible = true;
+
+        switch (this.phase) {
+            case PlayPhase.Aiming:
+                nextTopOpacity = 88;
+                nextBottomOpacity = 226;
+                nextTopPosition = this.topHudFocusPosition;
+                nextBottomPosition = this.bottomHudFocusPosition;
+                helperVisible = true;
+                break;
+            case PlayPhase.Moving:
+                nextTopOpacity = 178;
+                nextBottomOpacity = 214;
+                helperVisible = false;
+                break;
+            case PlayPhase.Paused:
+            case PlayPhase.Settlement:
+                nextTopOpacity = 110;
+                nextBottomOpacity = 110;
+                helperVisible = false;
+                break;
+            case PlayPhase.Menu:
+                nextTopOpacity = 0;
+                nextBottomOpacity = 0;
+                helperVisible = false;
+                break;
+            case PlayPhase.Idle:
+            default:
+                nextTopOpacity = 255;
+                nextBottomOpacity = 255;
+                helperVisible = true;
+                break;
+        }
+
+        this.helperButton.active = helperVisible;
+        Tween.stopAllByTarget(topOpacity);
+        Tween.stopAllByTarget(bottomOpacity);
+        Tween.stopAllByTarget(this.topHud);
+        Tween.stopAllByTarget(this.bottomHud);
+        tween(topOpacity).to(0.16, { opacity: nextTopOpacity }).start();
+        tween(bottomOpacity).to(0.16, { opacity: nextBottomOpacity }).start();
+        tween(this.topHud).to(0.16, { position: nextTopPosition }).start();
+        tween(this.bottomHud).to(0.16, { position: nextBottomPosition }).start();
+    }
+
+    private spawnFloatingText(text: string, tablePosition: Vec2, color: Color, fontSize = 24, rise = 62): void {
+        const label = UiFactory.createLabel(this.fxLayer, `Float-${Date.now()}-${Math.random()}`, text, fontSize, tablePosition, color, 180, 36);
         const node = label.node;
-        const opacity = node.addComponent(UIOpacity);
+        const opacity = node.getComponent(UIOpacity) ?? node.addComponent(UIOpacity);
         opacity.opacity = 255;
-        tween(node).to(0.65, { position: v3(tablePosition.x, tablePosition.y + 62, 0) }).call(() => node.destroy()).start();
+        node.setScale(0.86, 0.86, 1);
+        tween(opacity).to(0.16, { opacity: 255 }).to(0.46, { opacity: 0 }).start();
+        tween(node)
+            .to(0.14, { scale: v3(1, 1, 1), position: v3(tablePosition.x, tablePosition.y + rise * 0.42, 0) })
+            .to(0.48, { position: v3(tablePosition.x, tablePosition.y + rise, 0) })
+            .call(() => node.destroy())
+            .start();
+    }
+
+    private getBallTypeLabel(ballType: BallType): string {
+        switch (ballType) {
+            case BallType.Red:
+                return '红球';
+            case BallType.Yellow:
+                return '黄球';
+            case BallType.Blue:
+                return '蓝球';
+            case BallType.Black:
+                return '黑球';
+            case BallType.Cue:
+            default:
+                return '白球';
+        }
     }
 
     private toTableLocal(gameLocal: Vec2): Vec2 {

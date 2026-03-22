@@ -5,6 +5,7 @@ import {
     Layers,
     Node,
     Size,
+    Sprite,
     UITransform,
     UIOpacity,
     Vec2,
@@ -12,6 +13,20 @@ import {
 } from 'cc';
 
 export class UiFactory {
+    public static ensureNode(
+        parent: Node,
+        name: string,
+        position: Vec2 | Vec3,
+        width = 0,
+        height = 0,
+    ): Node {
+        const node = this.getOrCreateNode(parent, name);
+        node.setPosition(position.x, position.y, (position as Vec3).z ?? 0);
+        const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
+        transform.setContentSize(width, height);
+        return node;
+    }
+
     public static createRoundRect(
         parent: Node,
         name: string,
@@ -22,18 +37,21 @@ export class UiFactory {
         radius = 16,
         opacity = 255,
     ): Node {
-        const node = new Node(name);
-        node.layer = Layers.Enum.UI_2D;
-        parent.addChild(node);
+        const node = this.getOrCreateNode(parent, name);
         node.setPosition(position.x, position.y, (position as Vec3).z ?? 0);
 
-        const transform = node.addComponent(UITransform);
+        const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
         transform.setContentSize(size.width, size.height);
 
-        const uiOpacity = node.addComponent(UIOpacity);
+        const uiOpacity = node.getComponent(UIOpacity) ?? node.addComponent(UIOpacity);
         uiOpacity.opacity = opacity;
 
-        const graphics = node.addComponent(Graphics);
+        if (node.getComponent(Sprite)) {
+            return node;
+        }
+
+        const graphics = node.getComponent(Graphics) ?? node.addComponent(Graphics);
+        graphics.clear();
         graphics.fillColor = fillColor;
         graphics.roundRect(-size.width / 2, -size.height / 2, size.width, size.height, radius);
         graphics.fill();
@@ -57,18 +75,21 @@ export class UiFactory {
         opacity = 255,
     ): Node {
         const diameter = radius * 2;
-        const node = new Node(name);
-        node.layer = Layers.Enum.UI_2D;
-        parent.addChild(node);
+        const node = this.getOrCreateNode(parent, name);
         node.setPosition(position.x, position.y, (position as Vec3).z ?? 0);
 
-        const transform = node.addComponent(UITransform);
+        const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
         transform.setContentSize(diameter, diameter);
 
-        const uiOpacity = node.addComponent(UIOpacity);
+        const uiOpacity = node.getComponent(UIOpacity) ?? node.addComponent(UIOpacity);
         uiOpacity.opacity = opacity;
 
-        const graphics = node.addComponent(Graphics);
+        if (node.getComponent(Sprite)) {
+            return node;
+        }
+
+        const graphics = node.getComponent(Graphics) ?? node.addComponent(Graphics);
+        graphics.clear();
         graphics.fillColor = fillColor;
         graphics.circle(0, 0, radius);
         graphics.fill();
@@ -85,15 +106,13 @@ export class UiFactory {
         width = 320,
         height = 48,
     ): Label {
-        const node = new Node(name);
-        node.layer = Layers.Enum.UI_2D;
-        parent.addChild(node);
+        const node = this.getOrCreateNode(parent, name);
         node.setPosition(position.x, position.y, (position as Vec3).z ?? 0);
 
-        const transform = node.addComponent(UITransform);
+        const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
         transform.setContentSize(width, height);
 
-        const label = node.addComponent(Label);
+        const label = node.getComponent(Label) ?? node.addComponent(Label);
         label.useSystemFont = true;
         label.string = text;
         label.fontSize = fontSize;
@@ -103,5 +122,15 @@ export class UiFactory {
         label.verticalAlign = Label.VerticalAlign.CENTER;
         label.overflow = Label.Overflow.SHRINK;
         return label;
+    }
+
+    private static getOrCreateNode(parent: Node, name: string): Node {
+        let node = parent.getChildByName(name);
+        if (!node) {
+            node = new Node(name);
+            parent.addChild(node);
+        }
+        node.layer = Layers.Enum.UI_2D;
+        return node;
     }
 }
