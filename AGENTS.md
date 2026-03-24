@@ -266,3 +266,11 @@
 - 若要替换为 Creator 内置物理系统，请保留 `SnookerRules.ts` 和输入抽象层，避免重新耦合。
 - 修改 `Main.scene` 时尽量只做必要绑定，避免无关序列化噪音。
 - `doc/main.png` 是当前主界面的最新参考图，后续补 UI 或调版式时优先对照这张图。
+
+### 8.5 2026-03-24 成就系统更新
+
+- 已新增 `assets/scripts/config/AchievementConfig.ts`，统一维护当前 16 个成就的名称、描述、点数、隐藏状态与分模式阈值。
+- 已新增 `assets/scripts/core/AchievementSystem.ts`，负责本地成就存档、局内统计、解锁判定与成就点汇总。
+- `assets/scripts/game/SnookerGame.ts` 已在主界面新增“成就馆”按钮，点击后可打开全屏成就界面；界面当前采用木框、台呢、铜牌式陈列布局，与现有首页和 HUD 保持同一视觉语言。
+- 对局流程已接入成就解锁逻辑与顶部浮层提示，成就会在出杆、连续得分、BREAK、无犯规、关闭辅助线挑战和结算完成时自动判定并本地保存。
+- 后续若继续扩展成就，优先补充配置与 `AchievementSystem` 核心，不要把判定条件分散硬写进 UI 创建或按钮事件逻辑中。

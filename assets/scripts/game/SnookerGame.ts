@@ -20,6 +20,10 @@ import {
     v3,
 } from 'cc';
 import {
+    AchievementDefinition,
+    getAchievementTarget,
+} from '../config/AchievementConfig';
+import {
     BAULK_LINE_X,
     BALL_COLORS,
     BALL_RADIUS,
@@ -39,6 +43,7 @@ import {
     TABLE_OUTER_HEIGHT,
     TABLE_OUTER_WIDTH,
 } from '../config/SnookerConfig';
+import { AchievementSystem } from '../core/AchievementSystem';
 import { PointerInput } from '../core/PointerInput';
 import { SnookerPhysics } from '../core/SnookerPhysics';
 import { SnookerRules } from '../core/SnookerRules';
@@ -81,11 +86,14 @@ export class SnookerGame extends Component {
     private mode = MatchMode.Casual;
     private physics = new SnookerPhysics();
     private rules = new SnookerRules();
+    private achievementSystem = new AchievementSystem();
     private pointerInput: PointerInput | null = null;
 
     private menuLayer!: Node;
     private gameLayer!: Node;
     private overlayLayer!: Node;
+    private achievementPanel!: Node;
+    private achievementGrid!: Node;
     private tableRoot!: Node;
     private tableBallLayer!: Node;
     private fxLayer!: Node;
@@ -119,6 +127,10 @@ export class SnookerGame extends Component {
     private menuThumbnailBallLayer!: Node;
     private menuStartButton!: Node;
     private menuModeButtons: Node[] = [];
+    private achievementMenuProgressLabel!: Label;
+    private achievementUnlockedCountLabel!: Label;
+    private achievementPointsLabel!: Label;
+    private achievementHiddenLabel!: Label;
 
     private helperButton!: Node;
     private helperButtonLabel!: Label;
@@ -138,6 +150,12 @@ export class SnookerGame extends Component {
     private overlayPrimaryAction: (() => void) | null = null;
     private overlaySecondaryAction: (() => void) | null = null;
     private overlayTertiaryAction: (() => void) | null = null;
+    private achievementToastNode!: Node;
+    private achievementToastTitleLabel!: Label;
+    private achievementToastDetailLabel!: Label;
+    private achievementToastPointsLabel!: Label;
+    private achievementToastQueue: AchievementDefinition[] = [];
+    private isAchievementToastPlaying = false;
 
     private balls: BallState[] = [];
     private pottedThisShot: BallState[] = [];
@@ -220,9 +238,11 @@ export class SnookerGame extends Component {
             this.highScore = Number.isFinite(storedHighScore) ? Math.max(0, storedHighScore) : 0;
             const soundRaw = sys.localStorage.getItem(SOUND_KEY);
             this.soundEnabled = soundRaw === null ? true : soundRaw === '1';
+            this.achievementSystem.load();
         } catch (error) {
             this.highScore = 0;
             this.soundEnabled = true;
+            this.achievementSystem.load();
             console.warn('[SnookerGame] 读取本地存档失败，已使用默认值。', error);
         }
     }
@@ -242,6 +262,7 @@ export class SnookerGame extends Component {
         this.buildMenuLayerLite();
         this.buildGameLayer();
         this.buildOverlayLayer();
+        this.buildAchievementToast();
     }
 
     private preloadTextures(): void {
@@ -492,8 +513,361 @@ export class SnookerGame extends Component {
         this.menuStartButton = casualButton;
 
         this.createMenuDecorations(menuFelt);
+        this.buildMenuUtilityButtons(menuTable);
+        this.buildAchievementPanel();
         this.refreshMenuPreview();
         this.startMenuPulse();
+    }
+
+    private buildMenuUtilityButtons(menuTable: Node): void {
+        const progressPlate = UiFactory.createRoundRect(
+            menuTable,
+            'AchievementProgressPlate',
+            new Size(246, 58),
+            v3(-296, -272, 0),
+            withAlpha(SnookerTheme.metal.darkSoft, 198),
+            withAlpha(SnookerTheme.metal.frameBright, 94),
+            22,
+        );
+        this.decorateInsetPlate(
+            progressPlate,
+            new Size(246, 58),
+            22,
+            withAlpha(SnookerTheme.metal.darkSoft, 198),
+            withAlpha(SnookerTheme.metal.frameBright, 94),
+        );
+        this.applyInsetPanelSkin(progressPlate);
+        UiFactory.createLabel(progressPlate, 'ProgressTitle', '成就进度', 16, v3(-66, 0, 0), SnookerTheme.text.secondary, 104, 24);
+        this.achievementMenuProgressLabel = UiFactory.createLabel(progressPlate, 'ProgressValue', '', 20, v3(50, 0, 0), SnookerTheme.text.accent, 116, 24);
+        this.achievementMenuProgressLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
+        this.achievementMenuProgressLabel.string = `${this.achievementSystem.getUnlockedCount()} / ${this.achievementSystem.getTotalCount()}`;
+
+        const achievementButton = this.createButton(menuTable, '成就馆', v3(8, -272, 0), new Size(206, 58), 'green', () => this.openAchievementPanel());
+        const achievementLabel = this.mustFindNode(achievementButton, 'ButtonLabel').getComponent(Label)!;
+        achievementLabel.fontSize = 24;
+
+        const ruleButton = this.createButton(menuTable, '规则说明', v3(254, -272, 0), new Size(176, 58), 'neutral', () => this.showRuleOverlay());
+        this.emphasizeSecondaryButton(ruleButton);
+    }
+
+    private buildAchievementPanel(): void {
+        this.achievementPanel = UiFactory.ensureNode(this.menuLayer, 'AchievementPanel', v3(0, 0, 30), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        this.achievementPanel.removeAllChildren();
+
+        const mask = UiFactory.createRoundRect(
+            this.achievementPanel,
+            'AchievementMask',
+            new Size(DESIGN_SIZE.width, DESIGN_SIZE.height),
+            v3(0, 0, 0),
+            withAlpha(SnookerTheme.background.vignette, 232),
+        );
+        const swallowPointer = (event: any) => {
+            event.propagationStopped = true;
+        };
+        mask.on(Node.EventType.TOUCH_START, swallowPointer, this);
+        mask.on(Node.EventType.TOUCH_END, swallowPointer, this);
+        mask.on(Node.EventType.MOUSE_DOWN, swallowPointer, this);
+        mask.on(Node.EventType.MOUSE_UP, swallowPointer, this);
+
+        const board = UiFactory.createRoundRect(
+            this.achievementPanel,
+            'AchievementBoard',
+            new Size(1140, 636),
+            v3(0, 0, 0),
+            SnookerTheme.table.woodMid,
+            SnookerTheme.table.brass,
+            40,
+        );
+        this.decorateWoodShell(board, new Size(1140, 636), 40);
+        this.applyWoodSkin(board);
+
+        const felt = UiFactory.createRoundRect(
+            board,
+            'AchievementFelt',
+            new Size(1060, 556),
+            v3(0, 0, 0),
+            SnookerTheme.table.felt,
+            SnookerTheme.table.feltLight,
+            30,
+        );
+        this.decorateFeltSurface(felt, new Size(1060, 556), 30);
+        this.applyFeltSkin(felt);
+
+        const titleRibbon = UiFactory.createRoundRect(
+            felt,
+            'AchievementTitleRibbon',
+            new Size(356, 72),
+            v3(0, 228, 0),
+            withAlpha(new Color(22, 86, 70, 236), 236),
+            withAlpha(SnookerTheme.table.brass, 180),
+            28,
+        );
+        this.decorateLitePanel(
+            titleRibbon,
+            new Size(356, 72),
+            28,
+            withAlpha(new Color(22, 86, 70, 236), 236),
+            withAlpha(SnookerTheme.table.brass, 180),
+        );
+        this.applyTopStripSkin(titleRibbon);
+        const titleLabel = UiFactory.createLabel(titleRibbon, 'AchievementTitle', '成就馆', 34, v3(0, 10, 0), SnookerTheme.text.primary, 240, 36);
+        titleLabel.lineHeight = 36;
+        UiFactory.createLabel(titleRibbon, 'AchievementSubtitle', 'COLLECTION BOARD', 14, v3(0, -18, 0), SnookerTheme.text.accent, 220, 18);
+
+        const summaryPlate = UiFactory.createRoundRect(
+            felt,
+            'AchievementSummaryPlate',
+            new Size(984, 88),
+            v3(0, 148, 0),
+            withAlpha(SnookerTheme.metal.dark, 182),
+            withAlpha(SnookerTheme.metal.frameBright, 88),
+            28,
+        );
+        this.decorateLitePanel(
+            summaryPlate,
+            new Size(984, 88),
+            28,
+            withAlpha(SnookerTheme.metal.dark, 182),
+            withAlpha(SnookerTheme.metal.frameBright, 88),
+        );
+        this.applyDarkPanelSkin(summaryPlate);
+        this.achievementUnlockedCountLabel = this.createAchievementSummaryChip(summaryPlate, 'SummaryUnlocked', v3(-286, 0, 0), '已解锁');
+        this.achievementPointsLabel = this.createAchievementSummaryChip(summaryPlate, 'SummaryPoints', v3(0, 0, 0), '成就点');
+        this.achievementHiddenLabel = this.createAchievementSummaryChip(summaryPlate, 'SummaryHidden', v3(286, 0, 0), '隐藏收集');
+
+        const gridShell = UiFactory.createRoundRect(
+            felt,
+            'AchievementGridShell',
+            new Size(992, 400),
+            v3(0, -58, 0),
+            withAlpha(SnookerTheme.metal.darkSoft, 188),
+            withAlpha(SnookerTheme.metal.frameBright, 70),
+            28,
+        );
+        this.decorateInsetPlate(
+            gridShell,
+            new Size(992, 400),
+            28,
+            withAlpha(SnookerTheme.metal.darkSoft, 188),
+            withAlpha(SnookerTheme.metal.frameBright, 70),
+        );
+        this.applyInsetPanelSkin(gridShell);
+        this.achievementGrid = UiFactory.ensureNode(gridShell, 'AchievementGrid', v3(0, 0, 0), 940, 356);
+
+        const closeButton = this.createButton(felt, '关闭', v3(426, 228, 0), new Size(146, 52), 'neutral', () => this.closeAchievementPanel());
+        this.emphasizeSecondaryButton(closeButton);
+        this.refreshAchievementPanel();
+        this.achievementPanel.active = false;
+    }
+
+    private createAchievementSummaryChip(parent: Node, name: string, position: Vec3, title: string): Label {
+        const chip = UiFactory.createRoundRect(
+            parent,
+            name,
+            new Size(256, 58),
+            position,
+            withAlpha(SnookerTheme.metal.darkSoft, 198),
+            withAlpha(SnookerTheme.metal.frameBright, 72),
+            20,
+        );
+        this.decorateInsetPlate(
+            chip,
+            new Size(256, 58),
+            20,
+            withAlpha(SnookerTheme.metal.darkSoft, 198),
+            withAlpha(SnookerTheme.metal.frameBright, 72),
+        );
+        this.applyInsetPanelSkin(chip);
+        const titleLabel = UiFactory.createLabel(chip, `${name}-Title`, title, 16, v3(-64, 0, 0), SnookerTheme.text.secondary, 96, 22);
+        titleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+        const valueLabel = UiFactory.createLabel(chip, `${name}-Value`, '', 22, v3(64, 0, 0), SnookerTheme.text.primary, 116, 26);
+        valueLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
+        return valueLabel;
+    }
+
+    private openAchievementPanel(): void {
+        this.refreshAchievementPanel();
+        this.achievementPanel.active = true;
+    }
+
+    private closeAchievementPanel(): void {
+        this.achievementPanel.active = false;
+    }
+
+    private refreshAchievementPanel(): void {
+        if (!this.achievementPanel || !this.achievementGrid) {
+            return;
+        }
+        this.achievementMenuProgressLabel.string = `${this.achievementSystem.getUnlockedCount()} / ${this.achievementSystem.getTotalCount()}`;
+        this.achievementUnlockedCountLabel.string = `${this.achievementSystem.getUnlockedCount()} / ${this.achievementSystem.getTotalCount()}`;
+        this.achievementPointsLabel.string = `${this.achievementSystem.getUnlockedPoints()} / ${this.achievementSystem.getTotalPoints()}`;
+        this.achievementHiddenLabel.string = `${this.achievementSystem.getUnlockedHiddenCount()} / ${this.achievementSystem.getHiddenCount()}`;
+
+        this.achievementGrid.removeAllChildren();
+        const definitions = this.achievementSystem.getDefinitions();
+        const columnCount = 4;
+        const cardWidth = 220;
+        const cardHeight = 78;
+        const gapX = 14;
+        const gapY = 14;
+        const totalWidth = columnCount * cardWidth + (columnCount - 1) * gapX;
+        const startX = -totalWidth / 2 + cardWidth / 2;
+        const startY = 126;
+
+        definitions.forEach((definition, index) => {
+            const column = index % columnCount;
+            const row = Math.floor(index / columnCount);
+            const x = startX + column * (cardWidth + gapX);
+            const y = startY - row * (cardHeight + gapY);
+            this.buildAchievementCard(definition, v3(x, y, 0), new Size(cardWidth, cardHeight));
+        });
+    }
+
+    private buildAchievementCard(definition: AchievementDefinition, position: Vec3, size: Size): void {
+        const unlockState = this.achievementSystem.getUnlockState(definition.id);
+        const unlocked = !!unlockState;
+        const card = UiFactory.createRoundRect(
+            this.achievementGrid,
+            `AchievementCard-${definition.id}`,
+            size,
+            position,
+            unlocked ? withAlpha(new Color(36, 92, 64, 240), 240) : withAlpha(SnookerTheme.metal.dark, 214),
+            unlocked ? withAlpha(SnookerTheme.table.brass, 156) : withAlpha(SnookerTheme.metal.frame, 84),
+            20,
+        );
+        this.decorateInsetPlate(
+            card,
+            size,
+            20,
+            unlocked ? withAlpha(new Color(36, 92, 64, 240), 240) : withAlpha(SnookerTheme.metal.dark, 214),
+            unlocked ? withAlpha(SnookerTheme.table.brass, 156) : withAlpha(SnookerTheme.metal.frame, 84),
+        );
+        this.applyInsetPanelSkin(card);
+
+        const displayName = unlocked || !definition.hidden ? definition.name : '???';
+        const description = unlocked || !definition.hidden ? definition.description : '继续突破更多挑战后解锁。';
+        const nameLabel = UiFactory.createLabel(card, 'AchievementName', displayName, 19, v3(-14, 18, 0), SnookerTheme.text.primary, 150, 24);
+        nameLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+
+        const pointBadge = UiFactory.createRoundRect(
+            card,
+            'AchievementPointsBadge',
+            new Size(56, 24),
+            v3(72, 18, 0),
+            unlocked ? withAlpha(SnookerTheme.table.brass, 208) : withAlpha(SnookerTheme.metal.darkSoft, 210),
+            withAlpha(SnookerTheme.text.accent, unlocked ? 90 : 44),
+            12,
+        );
+        this.decorateLitePanel(
+            pointBadge,
+            new Size(56, 24),
+            12,
+            unlocked ? withAlpha(SnookerTheme.table.brass, 208) : withAlpha(SnookerTheme.metal.darkSoft, 210),
+            withAlpha(SnookerTheme.text.accent, unlocked ? 90 : 44),
+        );
+        UiFactory.createLabel(pointBadge, 'AchievementPointsLabel', `${definition.points}`, 13, v3(0, 0, 0), unlocked ? SnookerTheme.metal.dark : SnookerTheme.text.secondary, 40, 16);
+
+        const descLabel = UiFactory.createLabel(card, 'AchievementDesc', description, 12, v3(0, -4, 0), unlocked ? withAlpha(SnookerTheme.text.primary, 214) : SnookerTheme.text.secondary, 190, 30);
+        descLabel.lineHeight = 14;
+
+        const footerLabel = UiFactory.createLabel(
+            card,
+            'AchievementFooter',
+            unlocked ? `已解锁 · ${definition.rarity}` : this.getAchievementCardFooter(definition),
+            12,
+            v3(0, -25, 0),
+            unlocked ? SnookerTheme.text.success : SnookerTheme.text.accent,
+            190,
+            16,
+        );
+        footerLabel.lineHeight = 14;
+    }
+
+    private getAchievementCardFooter(definition: AchievementDefinition): string {
+        const modeText = definition.modeLimit === 'all'
+            ? '双模式'
+            : definition.modeLimit === MatchMode.Casual
+                ? '休闲限定'
+                : '专家限定';
+        const target = definition.modeLimit === 'all'
+            ? definition.targetByMode
+                ? `休闲 ${getAchievementTarget(definition, MatchMode.Casual)} / 专家 ${getAchievementTarget(definition, MatchMode.Expert)}`
+                : `${definition.targetValue ?? 1}`
+            : `${getAchievementTarget(definition, definition.modeLimit) ?? 1}`;
+        return `${modeText} · ${target}`;
+    }
+
+    private buildAchievementToast(): void {
+        this.achievementToastNode = UiFactory.createRoundRect(
+            this.node,
+            'AchievementToast',
+            new Size(360, 84),
+            v3(0, 296, 0),
+            withAlpha(SnookerTheme.metal.dark, 232),
+            withAlpha(SnookerTheme.table.brass, 126),
+            22,
+        );
+        this.decorateLitePanel(
+            this.achievementToastNode,
+            new Size(360, 84),
+            22,
+            withAlpha(SnookerTheme.metal.dark, 232),
+            withAlpha(SnookerTheme.table.brass, 126),
+        );
+        this.applyTopStripSkin(this.achievementToastNode);
+        const opacity = this.achievementToastNode.getComponent(UIOpacity) ?? this.achievementToastNode.addComponent(UIOpacity);
+        opacity.opacity = 0;
+        this.achievementToastTitleLabel = UiFactory.createLabel(this.achievementToastNode, 'AchievementToastTitle', '成就解锁', 16, v3(-82, 16, 0), SnookerTheme.text.accent, 136, 20);
+        this.achievementToastTitleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+        this.achievementToastDetailLabel = UiFactory.createLabel(this.achievementToastNode, 'AchievementToastDetail', '', 24, v3(-24, -10, 0), SnookerTheme.text.primary, 198, 30);
+        this.achievementToastDetailLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+        this.achievementToastPointsLabel = UiFactory.createLabel(this.achievementToastNode, 'AchievementToastPoints', '', 20, v3(120, 0, 0), SnookerTheme.text.success, 92, 28);
+        this.achievementToastPointsLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
+        this.achievementToastNode.active = false;
+    }
+
+    private queueAchievementToasts(definitions: AchievementDefinition[]): void {
+        if (definitions.length === 0) {
+            return;
+        }
+        this.achievementToastQueue.push(...definitions);
+        this.refreshAchievementPanel();
+        this.playNextAchievementToast();
+    }
+
+    private playNextAchievementToast(): void {
+        if (this.isAchievementToastPlaying || this.achievementToastQueue.length === 0 || !this.achievementToastNode) {
+            return;
+        }
+        const definition = this.achievementToastQueue.shift();
+        if (!definition) {
+            return;
+        }
+        this.isAchievementToastPlaying = true;
+        this.achievementToastTitleLabel.string = '成就解锁';
+        this.achievementToastDetailLabel.string = definition.name;
+        this.achievementToastPointsLabel.string = `+${definition.points}`;
+        this.achievementToastNode.active = true;
+        this.achievementToastNode.setPosition(0, 296, 0);
+        const opacity = this.achievementToastNode.getComponent(UIOpacity) ?? this.achievementToastNode.addComponent(UIOpacity);
+        opacity.opacity = 0;
+        Tween.stopAllByTarget(this.achievementToastNode);
+        Tween.stopAllByTarget(opacity);
+        tween(opacity)
+            .to(0.18, { opacity: 255 })
+            .delay(1.45)
+            .to(0.22, { opacity: 0 })
+            .call(() => {
+                this.achievementToastNode.active = false;
+                this.isAchievementToastPlaying = false;
+                this.playNextAchievementToast();
+            })
+            .start();
+        tween(this.achievementToastNode)
+            .to(0.18, { position: v3(0, 260, 0) })
+            .delay(1.45)
+            .to(0.22, { position: v3(0, 244, 0) })
+            .start();
     }
 
     private createMenuTitleEmblem(parent: Node): void {
@@ -1213,6 +1587,11 @@ export class SnookerGame extends Component {
         for (const button of this.menuModeButtons) {
             Tween.stopAllByTarget(button);
         }
+        this.closeAchievementPanel();
+        this.achievementSystem.resetMatch(mode);
+        if (!this.helperAimEnabled) {
+            this.achievementSystem.onHelperToggle(false);
+        }
         this.score = 0;
         this.currentBreak = 0;
         this.shotsUsed = 0;
@@ -1249,8 +1628,10 @@ export class SnookerGame extends Component {
         this.phase = PlayPhase.Menu;
         this.menuLayer.active = true;
         this.gameLayer.active = false;
+        this.closeAchievementPanel();
         this.hideOverlay();
         this.clearAimGuides();
+        this.refreshAchievementPanel();
         this.refreshMenuPreview();
         this.startMenuPulse();
         this.updateGameplayPresentation();
@@ -1480,6 +1861,7 @@ export class SnookerGame extends Component {
 
     private toggleHelperAim(): void {
         this.helperAimEnabled = !this.helperAimEnabled;
+        this.achievementSystem.onHelperToggle(this.helperAimEnabled);
         this.updateHelperButton();
         if (this.phase === PlayPhase.Aiming && this.currentAimPointerOnTable) {
             this.updateAimGuides(this.currentAimPointerOnTable);
@@ -1571,6 +1953,7 @@ export class SnookerGame extends Component {
         this.phase = PlayPhase.Moving;
         this.currentAimPointerOnTable = null;
         this.shotsUsed += 1;
+        this.queueAchievementToasts(this.achievementSystem.onShotTaken({ shotsUsed: this.shotsUsed }));
         this.pottedThisShot = [];
         this.renderPowerBar(powerRatio);
         this.updatePowerDescriptor(powerRatio);
@@ -1619,6 +2002,7 @@ export class SnookerGame extends Component {
         this.phase = PlayPhase.Idle;
         this.physicsAccumulator = 0;
         const resolution = this.rules.evaluateShot(this.pottedThisShot);
+        const objectBallCount = this.pottedThisShot.filter((ball) => ball.ballType !== BallType.Cue).length;
         const nextScore = Math.max(0, this.score + resolution.scoreDelta - resolution.foulPenalty);
         const nextBreak = resolution.breakDelta > 0 ? this.currentBreak + resolution.breakDelta : 0;
         const report = this.composeShotReport(resolution, nextScore);
@@ -1636,14 +2020,29 @@ export class SnookerGame extends Component {
             this.isNewHighScoreThisMatch = true;
             this.savePersistentData();
         }
+        this.queueAchievementToasts(this.achievementSystem.onShotResolved({
+            mode: this.mode,
+            objectBallCount,
+            scoreDelta: resolution.scoreDelta,
+            cueBallPotted: resolution.cueBallPotted,
+            nextBreak,
+            shotsUsed: this.shotsUsed,
+            helperEnabled: this.helperAimEnabled,
+        }));
         this.refreshHud();
         this.syncBallVisuals();
-        if (this.pottedThisShot.filter((ball) => ball.ballType !== BallType.Cue).length > 1 && !resolution.cueBallPotted) {
-            this.spawnFloatingText(`COMBO x${this.pottedThisShot.filter((ball) => ball.ballType !== BallType.Cue).length}`, v2(0, 48), SnookerTheme.text.accent, 28, 86);
+        if (objectBallCount > 1 && !resolution.cueBallPotted) {
+            this.spawnFloatingText(`COMBO x${objectBallCount}`, v2(0, 48), SnookerTheme.text.accent, 28, 86);
         }
         this.pottedThisShot = [];
         this.updateGameplayPresentation();
         if (this.shouldSettleMatch()) {
+            this.queueAchievementToasts(this.achievementSystem.onMatchCompleted({
+                mode: this.mode,
+                score: this.score,
+                shotsUsed: this.shotsUsed,
+                helperEnabled: this.helperAimEnabled,
+            }));
             this.showSettlementLayout();
         }
     }
