@@ -124,6 +124,10 @@ export class SnookerGame extends Component {
     private helperButtonLabel!: Label;
     private overlayTitleLabel!: Label;
     private overlayDetailLabel!: Label;
+    private overlayStatsContainer!: Node;
+    private overlayStatsNoteLabel!: Label;
+    private overlayStatTitleLabels: Label[] = [];
+    private overlayStatValueLabels: Label[] = [];
     private overlayPrimaryButton!: Node;
     private overlaySecondaryButton!: Node;
     private overlayTertiaryButton!: Node;
@@ -235,7 +239,7 @@ export class SnookerGame extends Component {
     private buildSceneGraph(): void {
         this.node.removeAllChildren();
         this.buildBackground();
-        this.buildMenuLayer();
+        this.buildMenuLayerLite();
         this.buildGameLayer();
         this.buildOverlayLayer();
     }
@@ -442,6 +446,163 @@ export class SnookerGame extends Component {
         this.startMenuPulse();
     }
 
+    private buildMenuLayerLite(): void {
+        this.menuLayer = UiFactory.ensureNode(this.node, 'MenuLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
+        this.menuLayer.removeAllChildren();
+        this.menuModeButtons = [];
+
+        const menuTable = UiFactory.createRoundRect(this.menuLayer, 'MenuTable', new Size(1120, 628), v3(0, 0, 0), SnookerTheme.table.woodMid, SnookerTheme.table.brass, 44);
+        this.decorateWoodShell(menuTable, new Size(1120, 628), 44);
+        this.applyWoodSkin(menuTable);
+
+        const menuFelt = UiFactory.createRoundRect(menuTable, 'MenuFelt', new Size(1034, 538), v3(0, 0, 0), SnookerTheme.table.felt, SnookerTheme.table.feltLight, 30);
+        this.decorateFeltSurface(menuFelt, new Size(1034, 538), 30);
+        this.applyFeltSkin(menuFelt);
+
+        const centerGlow = UiFactory.ensureNode(menuFelt, 'MenuCenterGlow', v3(0, 8, 0), 760, 360);
+        const centerGlowGraphics = centerGlow.getComponent(Graphics) ?? centerGlow.addComponent(Graphics);
+        centerGlowGraphics.clear();
+        centerGlowGraphics.fillColor = withAlpha(SnookerTheme.text.accent, 18);
+        centerGlowGraphics.roundRect(-380, -180, 760, 360, 176);
+        centerGlowGraphics.fill();
+
+        for (const pocket of [v2(-505, 255), v2(0, 255), v2(505, 255), v2(-505, -255), v2(0, -255), v2(505, -255)]) {
+            const pocketNode = UiFactory.createCircle(menuTable, `MenuPocket-${pocket.x}-${pocket.y}`, 24, pocket, SnookerTheme.table.pocket);
+            this.applyPocketSkin(pocketNode);
+            this.drawCircleStroke(pocketNode, 23, SnookerTheme.table.pocketLip, 4);
+        }
+
+        this.createMenuTitleEmblem(menuFelt);
+
+        const casualButton = this.createModeSelectionButton(
+            menuFelt,
+            MATCH_MODE_CONFIGS[MatchMode.Casual],
+            v3(-214, -8, 0),
+            'bronze',
+            () => this.startMatch(MatchMode.Casual),
+        );
+        const expertButton = this.createModeSelectionButton(
+            menuFelt,
+            MATCH_MODE_CONFIGS[MatchMode.Expert],
+            v3(214, -8, 0),
+            'blue',
+            () => this.startMatch(MatchMode.Expert),
+        );
+        this.menuModeButtons = [casualButton, expertButton];
+        this.menuStartButton = casualButton;
+
+        this.createMenuDecorations(menuFelt);
+        this.refreshMenuPreview();
+        this.startMenuPulse();
+    }
+
+    private createMenuTitleEmblem(parent: Node): void {
+        const titleShadow = UiFactory.createLabel(parent, 'MenuTitleShadow', '斯诺克', 78, v3(0, 170, 0), withAlpha(new Color(54, 26, 10, 220), 220), 520, 86);
+        titleShadow.node.setPosition(0, 162, 0);
+        titleShadow.lineHeight = 84;
+
+        const title = UiFactory.createLabel(parent, 'MenuTitle', '斯诺克', 78, v3(0, 170, 0), SnookerTheme.text.accent, 520, 86);
+        title.lineHeight = 84;
+
+        const crownArc = UiFactory.ensureNode(parent, 'MenuTitleArc', v3(0, 146, 0), 520, 96);
+        const crownArcGraphics = crownArc.getComponent(Graphics) ?? crownArc.addComponent(Graphics);
+        crownArcGraphics.clear();
+        crownArcGraphics.lineWidth = 6;
+        crownArcGraphics.strokeColor = withAlpha(SnookerTheme.table.brass, 224);
+        crownArcGraphics.moveTo(-206, -4);
+        crownArcGraphics.bezierCurveTo(-150, 42, -76, 54, 0, 46);
+        crownArcGraphics.bezierCurveTo(76, 54, 150, 42, 206, -4);
+        crownArcGraphics.stroke();
+
+        const ribbon = UiFactory.createRoundRect(parent, 'MenuTitleRibbon', new Size(336, 72), v3(0, 86, 0), withAlpha(new Color(20, 96, 68, 232), 232), withAlpha(SnookerTheme.table.brass, 164), 30);
+        this.decorateLitePanel(ribbon, new Size(336, 72), 30, withAlpha(new Color(20, 96, 68, 232), 232), withAlpha(SnookerTheme.table.brass, 164));
+        this.applyTopStripSkin(ribbon);
+        const ribbonLabel = UiFactory.createLabel(ribbon, 'RibbonLabel', 'SNOOKER', 26, v3(0, 0, 0), SnookerTheme.text.accent, 280, 34);
+        ribbonLabel.lineHeight = 28;
+
+        for (const x of [-244, 244]) {
+            const wing = UiFactory.ensureNode(parent, `MenuWing-${x}`, v3(x, 95, 0), 112, 86);
+            const wingGraphics = wing.getComponent(Graphics) ?? wing.addComponent(Graphics);
+            wingGraphics.clear();
+            wingGraphics.lineWidth = 4;
+            wingGraphics.strokeColor = withAlpha(SnookerTheme.table.brass, 210);
+            for (let index = 0; index < 4; index += 1) {
+                const direction = x < 0 ? 1 : -1;
+                const leafX = direction * (index * 11);
+                const leafY = 20 - index * 12;
+                wingGraphics.moveTo(0, leafY);
+                wingGraphics.bezierCurveTo(leafX + direction * 10, leafY + 12, leafX + direction * 22, leafY + 4, leafX + direction * 28, leafY - 8);
+            }
+            wingGraphics.stroke();
+        }
+
+        this.createMenuSparkle(parent, 'MenuSparkleTopLeft', v3(-106, 196, 0), 11);
+        this.createMenuSparkle(parent, 'MenuSparkleTopRight', v3(112, 204, 0), 9);
+        this.createMenuSparkle(parent, 'MenuSparkleRibbonLeft', v3(-188, 116, 0), 7);
+        this.createMenuSparkle(parent, 'MenuSparkleRibbonRight', v3(186, 102, 0), 6);
+    }
+
+    private createMenuDecorations(parent: Node): void {
+        this.createDecorativeBall(parent, 'MenuRedBallTop', 20, v2(-414, 126), BALL_COLORS[BallType.Red], true);
+        this.createDecorativeBall(parent, 'MenuYellowBallTop', 18, v2(424, 146), BALL_COLORS[BallType.Yellow], true);
+        this.createDecorativeBall(parent, 'MenuCueBallLeft', 20, v2(-324, -176), BALL_COLORS[BallType.Cue], true);
+        this.createDecorativeBall(parent, 'MenuBlackBall', 19, v2(372, -196), BALL_COLORS[BallType.Black], true);
+        this.createDecorativeBall(parent, 'MenuBlueBall', 22, v2(466, -216), BALL_COLORS[BallType.Blue], true);
+
+        const redCluster = [
+            v2(444, -142),
+            v2(476, -128),
+            v2(506, -116),
+            v2(430, -176),
+            v2(462, -164),
+            v2(492, -152),
+            v2(524, -138),
+            v2(448, -208),
+            v2(480, -196),
+        ];
+        redCluster.forEach((position, index) => {
+            this.createDecorativeBall(parent, `MenuClusterRed-${index}`, 19, position, BALL_COLORS[BallType.Red], true);
+        });
+
+        const cueNode = UiFactory.ensureNode(parent, 'MenuCueStick', v3(334, -166, 0), 410, 144);
+        const cueGraphics = cueNode.getComponent(Graphics) ?? cueNode.addComponent(Graphics);
+        cueGraphics.clear();
+        cueGraphics.lineWidth = 18;
+        cueGraphics.strokeColor = new Color(160, 108, 58, 236);
+        cueGraphics.moveTo(-172, -18);
+        cueGraphics.lineTo(158, 70);
+        cueGraphics.stroke();
+        cueGraphics.lineWidth = 5;
+        cueGraphics.strokeColor = withAlpha(Color.WHITE, 128);
+        cueGraphics.moveTo(-172, -18);
+        cueGraphics.lineTo(158, 70);
+        cueGraphics.stroke();
+        cueGraphics.lineWidth = 10;
+        cueGraphics.strokeColor = new Color(58, 102, 180, 236);
+        cueGraphics.moveTo(-182, -20);
+        cueGraphics.lineTo(-146, -10);
+        cueGraphics.stroke();
+    }
+
+    private createMenuSparkle(parent: Node, name: string, position: Vec3, radius: number): void {
+        const sparkle = UiFactory.ensureNode(parent, name, position, radius * 4, radius * 4);
+        const sparkleGraphics = sparkle.getComponent(Graphics) ?? sparkle.addComponent(Graphics);
+        sparkleGraphics.clear();
+        sparkleGraphics.lineWidth = 2;
+        sparkleGraphics.strokeColor = withAlpha(SnookerTheme.text.accent, 208);
+        sparkleGraphics.moveTo(0, radius);
+        sparkleGraphics.lineTo(0, -radius);
+        sparkleGraphics.moveTo(-radius, 0);
+        sparkleGraphics.lineTo(radius, 0);
+        sparkleGraphics.stroke();
+        sparkleGraphics.lineWidth = 1.2;
+        sparkleGraphics.moveTo(-radius * 0.7, radius * 0.7);
+        sparkleGraphics.lineTo(radius * 0.7, -radius * 0.7);
+        sparkleGraphics.moveTo(radius * 0.7, radius * 0.7);
+        sparkleGraphics.lineTo(-radius * 0.7, -radius * 0.7);
+        sparkleGraphics.stroke();
+    }
+
     private buildGameLayer(): void {
         this.gameLayer = UiFactory.ensureNode(this.node, 'GameLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
         this.gameLayer.removeAllChildren();
@@ -581,11 +742,41 @@ export class SnookerGame extends Component {
         this.overlayLayer.removeAllChildren();
         const mask = UiFactory.createRoundRect(this.overlayLayer, 'OverlayMask', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), withAlpha(SnookerTheme.background.vignette, 220));
         mask.getComponent(UIOpacity)!.opacity = 210;
-        const panel = UiFactory.createRoundRect(this.overlayLayer, 'OverlayPanel', new Size(590, 352), v3(0, 8, 0), withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110), 30);
-        this.decoratePanel(panel, new Size(590, 352), 30, withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110));
+        const panel = UiFactory.createRoundRect(this.overlayLayer, 'OverlayPanel', new Size(590, 392), v3(0, 8, 0), withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110), 30);
+        this.decoratePanel(panel, new Size(590, 392), 30, withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110));
         this.applyDarkPanelSkin(panel);
-        this.overlayTitleLabel = UiFactory.createLabel(panel, 'OverlayTitle', '', 36, v3(0, 112, 0), SnookerTheme.text.primary, 460, 50);
-        this.overlayDetailLabel = UiFactory.createLabel(panel, 'OverlayDetail', '', 20, v3(0, 28, 0), SnookerTheme.text.secondary, 470, 136);
+        this.overlayTitleLabel = UiFactory.createLabel(panel, 'OverlayTitle', '', 36, v3(0, 126, 0), SnookerTheme.text.primary, 460, 50);
+        this.overlayDetailLabel = UiFactory.createLabel(panel, 'OverlayDetail', '', 20, v3(0, 32, 0), SnookerTheme.text.secondary, 470, 150);
+        this.overlayStatsContainer = UiFactory.ensureNode(panel, 'OverlayStatsContainer', v3(0, -6, 0), 470, 176);
+        this.overlayStatsContainer.active = false;
+        this.overlayStatsNoteLabel = UiFactory.createLabel(this.overlayStatsContainer, 'OverlayStatsNote', '', 18, v3(0, 84, 0), SnookerTheme.text.secondary, 420, 38);
+        this.overlayStatsNoteLabel.lineHeight = 24;
+        this.overlayStatTitleLabels = [];
+        this.overlayStatValueLabels = [];
+        for (let index = 0; index < 5; index += 1) {
+            const row = UiFactory.createRoundRect(
+                this.overlayStatsContainer,
+                `OverlayStatRow-${index}`,
+                new Size(446, 30),
+                v3(0, 44 - index * 38, 0),
+                withAlpha(SnookerTheme.metal.darkSoft, 152),
+                withAlpha(SnookerTheme.metal.frameBright, 40),
+                17,
+            );
+            this.decorateLitePanel(
+                row,
+                new Size(446, 30),
+                17,
+                withAlpha(SnookerTheme.metal.darkSoft, 152),
+                withAlpha(SnookerTheme.metal.frameBright, 40),
+            );
+            const titleLabel = UiFactory.createLabel(row, `OverlayStatTitle-${index}`, '', 18, v3(-170, 0, 0), SnookerTheme.text.secondary, 160, 22);
+            titleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+            const valueLabel = UiFactory.createLabel(row, `OverlayStatValue-${index}`, '', 22, v3(170, 0, 0), SnookerTheme.text.primary, 160, 22);
+            valueLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
+            this.overlayStatTitleLabels.push(titleLabel);
+            this.overlayStatValueLabels.push(valueLabel);
+        }
 
         this.overlayPrimaryButton = this.createButton(panel, '继续游戏', v3(0, -38, 0), new Size(236, 54), 'blue', () => this.overlayPrimaryAction?.());
         this.overlayPrimaryLabel = this.mustFindNode(this.overlayPrimaryButton, 'ButtonLabel').getComponent(Label)!;
@@ -847,12 +1038,12 @@ export class SnookerGame extends Component {
         style: ButtonStyle,
         onClick: () => void,
     ): Node {
-        const button = this.createButton(parent, config.name, position, new Size(232, 108), style, onClick);
+        const button = this.createButton(parent, config.name, position, new Size(366, 136), style, onClick);
         const titleLabel = this.mustFindNode(button, 'ButtonLabel').getComponent(Label)!;
-        titleLabel.fontSize = 30;
-        titleLabel.lineHeight = 34;
-        titleLabel.node.setPosition(0, 16, 0);
-        UiFactory.createLabel(button, 'ModeSubtitle', config.subtitle, 15, v3(0, -20, 0), withAlpha(Color.WHITE, 214), 184, 34);
+        titleLabel.fontSize = 42;
+        titleLabel.lineHeight = 46;
+        titleLabel.node.setPosition(0, 22, 0);
+        UiFactory.createLabel(button, 'ModeSubtitle', config.subtitle, 17, v3(0, -28, 0), withAlpha(Color.WHITE, 226), 300, 36);
         return button;
     }
 
@@ -954,17 +1145,6 @@ export class SnookerGame extends Component {
 
 
     private refreshMenuPreview(animate = false): void {
-        const config = this.getCurrentModeConfig();
-        this.menuDetailLabel.string = config.description;
-        this.menuModeLabel.string = config.difficultyLabel;
-        this.menuGoalLabel.string = config.subtitle;
-        this.menuTargetLabel.string = `${config.redCount}`;
-        this.menuShotLimitLabel.string = `${config.colorCount}`;
-        this.menuHighScoreLabel.string = this.highScore > 0 ? `${this.highScore} 分` : '暂无';
-        this.soundButtonLabel.string = this.soundEnabled ? '音效 开' : '音效 关';
-
-        this.rebuildPreviewBalls(this.menuPreviewBallLayer, config.ballLayouts, 540, 118, BALL_RADIUS * 0.55, true);
-        this.rebuildPreviewBalls(this.menuThumbnailBallLayer, config.ballLayouts, 228, 34, 4.4, false);
         this.refreshMenuModeButtons();
 
         if (animate) {
@@ -1004,24 +1184,12 @@ export class SnookerGame extends Component {
     }
 
     private playPreviewSwapAnimation(): void {
-        Tween.stopAllByTarget(this.menuPreviewBallLayer);
-        Tween.stopAllByTarget(this.menuThumbnailBallLayer);
-        Tween.stopAllByTarget(this.menuGoalLabel.node);
-
-        this.menuPreviewBallLayer.setScale(0.96, 0.96, 1);
-        const previewOpacity = this.menuPreviewBallLayer.getComponent(UIOpacity) ?? this.menuPreviewBallLayer.addComponent(UIOpacity);
-        previewOpacity.opacity = 0;
-        tween(previewOpacity).to(0.18, { opacity: 255 }).start();
-        tween(this.menuPreviewBallLayer).to(0.24, { scale: v3(1, 1, 1) }).start();
-
-        this.menuThumbnailBallLayer.setScale(0.9, 0.9, 1);
-        const thumbOpacity = this.menuThumbnailBallLayer.getComponent(UIOpacity) ?? this.menuThumbnailBallLayer.addComponent(UIOpacity);
-        thumbOpacity.opacity = 0;
-        tween(thumbOpacity).to(0.16, { opacity: 255 }).start();
-        tween(this.menuThumbnailBallLayer).to(0.22, { scale: v3(1, 1, 1) }).start();
-
-        this.menuGoalLabel.node.setScale(1, 0.82, 1);
-        tween(this.menuGoalLabel.node).to(0.2, { scale: v3(1, 1, 1) }).start();
+        for (const button of this.menuModeButtons) {
+            Tween.stopAllByTarget(button);
+            const baseScale = button.getScale().clone();
+            button.setScale(baseScale.x * 0.94, baseScale.y * 0.94, 1);
+            tween(button).to(0.18, { scale: baseScale }).start();
+        }
     }
 
     private mapTableToPreview(position: Vec2, previewWidth: number, previewHeight: number): Vec2 {
@@ -1128,6 +1296,11 @@ export class SnookerGame extends Component {
         tertiary?: OverlayButtonConfig,
     ): void {
         this.overlayTitleLabel.string = title;
+        this.overlayStatsContainer.active = false;
+        this.overlayDetailLabel.node.active = true;
+        this.overlayDetailLabel.node.setPosition(0, 32, 0);
+        this.overlayDetailLabel.getComponent(UITransform)?.setContentSize(470, 150);
+        this.overlayDetailLabel.lineHeight = 26;
         this.overlayDetailLabel.string = detail;
         this.setOverlayButton(this.overlayPrimaryButton, this.overlayPrimaryLabel, primary, (action) => {
             this.overlayPrimaryAction = action;
@@ -1140,6 +1313,27 @@ export class SnookerGame extends Component {
         });
         this.layoutOverlayButtons();
         this.overlayLayer.active = true;
+    }
+
+    private showSettlementOverlay(
+        title: string,
+        note: string,
+        rows: Array<{ title: string; value: string }>,
+        secondary: OverlayButtonConfig,
+        tertiary: OverlayButtonConfig,
+    ): void {
+        this.showOverlay(title, '', undefined, secondary, tertiary);
+        this.overlayStatsContainer.active = true;
+        this.overlayDetailLabel.node.setPosition(0, 96, 0);
+        this.overlayDetailLabel.getComponent(UITransform)?.setContentSize(470, 44);
+        this.overlayDetailLabel.lineHeight = 24;
+        this.overlayDetailLabel.string = note;
+        this.overlayStatsNoteLabel.string = '';
+        this.overlayStatTitleLabels.forEach((label, index) => {
+            const row = rows[index];
+            label.string = row?.title ?? '';
+            this.overlayStatValueLabels[index].string = row?.value ?? '';
+        });
     }
 
     private setOverlayButton(
@@ -1172,19 +1366,19 @@ export class SnookerGame extends Component {
         }
 
         if (activeButtons.length === 1) {
-            activeButtons[0].setPosition(0, -108, 0);
+            activeButtons[0].setPosition(0, -126, 0);
             return;
         }
 
         if (activeButtons.length === 2) {
-            activeButtons[0].setPosition(-122, -108, 0);
-            activeButtons[1].setPosition(122, -108, 0);
+            activeButtons[0].setPosition(-122, -126, 0);
+            activeButtons[1].setPosition(122, -126, 0);
             return;
         }
 
-        this.overlayPrimaryButton.setPosition(0, -44, 0);
-        this.overlaySecondaryButton.setPosition(-130, -118, 0);
-        this.overlayTertiaryButton.setPosition(130, -118, 0);
+        this.overlayPrimaryButton.setPosition(0, -58, 0);
+        this.overlaySecondaryButton.setPosition(-130, -132, 0);
+        this.overlayTertiaryButton.setPosition(130, -132, 0);
     }
 
     private hideOverlay(): void {
@@ -1450,7 +1644,7 @@ export class SnookerGame extends Component {
         this.pottedThisShot = [];
         this.updateGameplayPresentation();
         if (this.shouldSettleMatch()) {
-            this.showSettlement();
+            this.showSettlementLayout();
         }
     }
 
@@ -1535,6 +1729,30 @@ export class SnookerGame extends Component {
             this.isNewHighScoreThisMatch ? '刷新纪录' : `${config.name}完成`,
             summary,
             undefined,
+            { label: '再来一局', style: 'green', action: () => this.restartCurrentMatch() },
+            { label: '返回菜单', style: 'neutral', action: () => this.showMenu() },
+        );
+    }
+
+    private showSettlementLayout(): void {
+        this.phase = PlayPhase.Settlement;
+        this.updateGameplayPresentation();
+        const config = this.getCurrentModeConfig();
+        const note = this.isNewHighScoreThisMatch
+            ? '已刷新本地最高分。'
+            : this.mode === MatchMode.Casual
+                ? '这一局节奏很快，适合马上再来。'
+                : '标准球型已清台，可以继续冲击更高 BREAK。';
+        this.showSettlementOverlay(
+            this.isNewHighScoreThisMatch ? '刷新纪录' : `${config.name}完成`,
+            note,
+            [
+                { title: '模式', value: config.name },
+                { title: '得分', value: `${this.score}` },
+                { title: '进球', value: `${this.pottedCount}` },
+                { title: '出杆', value: `${this.shotsUsed}` },
+                { title: '最高分', value: `${this.highScore}` },
+            ],
             { label: '再来一局', style: 'green', action: () => this.restartCurrentMatch() },
             { label: '返回菜单', style: 'neutral', action: () => this.showMenu() },
         );
