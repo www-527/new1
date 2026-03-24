@@ -77,6 +77,16 @@ interface CollisionPrediction {
     targetDirection: Vec2;
 }
 
+interface AchievementCardView {
+    root: Node;
+    background: Sprite | null;
+    pointsBadge: Sprite | null;
+    nameLabel: Label;
+    pointsLabel: Label;
+    descLabel: Label;
+    footerLabel: Label;
+}
+
 type RuntimeButtonNode = Node & {
     __snookerClickAction?: (() => void) | null;
     __snookerButtonBound?: boolean;
@@ -96,6 +106,9 @@ export class SnookerGame extends Component {
     private menuLayer!: Node;
     private gameLayer!: Node;
     private overlayLayer!: Node;
+    private messagePanel!: Node;
+    private settingsPanel!: Node;
+    private settlementPanel!: Node;
     private achievementPanel!: Node;
     private achievementGrid!: Node;
     private tableRoot!: Node;
@@ -155,6 +168,16 @@ export class SnookerGame extends Component {
     private overlayPrimaryAction: (() => void) | null = null;
     private overlaySecondaryAction: (() => void) | null = null;
     private overlayTertiaryAction: (() => void) | null = null;
+    private settingsContinueButton!: Node;
+    private settingsRestartButton!: Node;
+    private settingsHomeButton!: Node;
+    private settlementTitleLabel!: Label;
+    private settlementNoteLabel!: Label;
+    private settlementRestartButton!: Node;
+    private settlementHomeButton!: Node;
+    private settlementStatTitleLabels: Label[] = [];
+    private settlementStatValueLabels: Label[] = [];
+    private achievementCardViews: AchievementCardView[] = [];
     private achievementToastNode!: Node;
     private achievementToastTitleLabel!: Label;
     private achievementToastDetailLabel!: Label;
@@ -284,15 +307,21 @@ export class SnookerGame extends Component {
 
     private buildSceneGraph(): void {
         const overlayLayer = this.node.getChildByName('OverlayLayer');
+        const achievementPanel = this.node.getChildByName('AchievementPanel');
         overlayLayer?.removeFromParent();
+        achievementPanel?.removeFromParent();
         this.node.removeAllChildren();
         this.buildBackground();
         this.buildMenuLayerLite();
         this.buildGameLayer();
+        if (achievementPanel) {
+            this.node.addChild(achievementPanel);
+        }
         if (overlayLayer) {
             this.node.addChild(overlayLayer);
         }
         this.buildOverlayLayer();
+        this.buildAchievementPanel();
         this.buildAchievementToast();
     }
 
@@ -547,8 +576,8 @@ export class SnookerGame extends Component {
 
         this.createMenuDecorations(menuFelt);
         this.buildMenuUtilityButtons(menuTable);
-        this.buildAchievementPanel();
         this.refreshMenuPreview();
+        this.refreshAchievementPanel();
         this.startMenuPulse();
     }
 
@@ -588,16 +617,12 @@ export class SnookerGame extends Component {
     }
 
     private buildAchievementPanel(): void {
-        this.achievementPanel = UiFactory.ensureNode(this.menuLayer, 'AchievementPanel', v3(0, 0, 30), DESIGN_SIZE.width, DESIGN_SIZE.height);
-        this.achievementPanel.removeAllChildren();
-
-        const mask = UiFactory.createRoundRect(
-            this.achievementPanel,
-            'AchievementMask',
-            new Size(DESIGN_SIZE.width, DESIGN_SIZE.height),
-            v3(0, 0, 0),
-            withAlpha(SnookerTheme.background.vignette, 232),
-        );
+        this.achievementPanel = this.mustFindNode(this.node, 'AchievementPanel');
+        this.achievementGrid = this.mustFindNode(this.achievementPanel, 'AchievementGrid');
+        this.achievementUnlockedCountLabel = this.mustFindNode(this.achievementPanel, 'SummaryUnlocked-Value').getComponent(Label)!;
+        this.achievementPointsLabel = this.mustFindNode(this.achievementPanel, 'SummaryPoints-Value').getComponent(Label)!;
+        this.achievementHiddenLabel = this.mustFindNode(this.achievementPanel, 'SummaryHidden-Value').getComponent(Label)!;
+        const mask = this.mustFindNode(this.achievementPanel, 'AchievementMask');
         const swallowPointer = (event: any) => {
             event.propagationStopped = true;
         };
@@ -605,121 +630,33 @@ export class SnookerGame extends Component {
         mask.on(Node.EventType.TOUCH_END, swallowPointer, this);
         mask.on(Node.EventType.MOUSE_DOWN, swallowPointer, this);
         mask.on(Node.EventType.MOUSE_UP, swallowPointer, this);
-
-        const board = UiFactory.createRoundRect(
-            this.achievementPanel,
-            'AchievementBoard',
-            new Size(1140, 636),
-            v3(0, 0, 0),
-            SnookerTheme.table.woodMid,
-            SnookerTheme.table.brass,
-            40,
-        );
-        this.decorateWoodShell(board, new Size(1140, 636), 40);
-        this.applyWoodSkin(board);
-
-        const felt = UiFactory.createRoundRect(
-            board,
-            'AchievementFelt',
-            new Size(1060, 556),
-            v3(0, 0, 0),
-            SnookerTheme.table.felt,
-            SnookerTheme.table.feltLight,
-            30,
-        );
-        this.decorateFeltSurface(felt, new Size(1060, 556), 30);
-        this.applyFeltSkin(felt);
-
-        const titleRibbon = UiFactory.createRoundRect(
-            felt,
-            'AchievementTitleRibbon',
-            new Size(356, 72),
-            v3(0, 228, 0),
-            withAlpha(new Color(22, 86, 70, 236), 236),
-            withAlpha(SnookerTheme.table.brass, 180),
-            28,
-        );
-        this.decorateLitePanel(
-            titleRibbon,
-            new Size(356, 72),
-            28,
-            withAlpha(new Color(22, 86, 70, 236), 236),
-            withAlpha(SnookerTheme.table.brass, 180),
-        );
-        this.applyTopStripSkin(titleRibbon);
-        const titleLabel = UiFactory.createLabel(titleRibbon, 'AchievementTitle', '成就馆', 34, v3(0, 10, 0), SnookerTheme.text.primary, 240, 36);
-        titleLabel.lineHeight = 36;
-        UiFactory.createLabel(titleRibbon, 'AchievementSubtitle', 'COLLECTION BOARD', 14, v3(0, -18, 0), SnookerTheme.text.accent, 220, 18);
-
-        const summaryPlate = UiFactory.createRoundRect(
-            felt,
-            'AchievementSummaryPlate',
-            new Size(984, 88),
-            v3(0, 148, 0),
-            withAlpha(SnookerTheme.metal.dark, 182),
-            withAlpha(SnookerTheme.metal.frameBright, 88),
-            28,
-        );
-        this.decorateLitePanel(
-            summaryPlate,
-            new Size(984, 88),
-            28,
-            withAlpha(SnookerTheme.metal.dark, 182),
-            withAlpha(SnookerTheme.metal.frameBright, 88),
-        );
-        this.applyDarkPanelSkin(summaryPlate);
-        this.achievementUnlockedCountLabel = this.createAchievementSummaryChip(summaryPlate, 'SummaryUnlocked', v3(-286, 0, 0), '已解锁');
-        this.achievementPointsLabel = this.createAchievementSummaryChip(summaryPlate, 'SummaryPoints', v3(0, 0, 0), '成就点');
-        this.achievementHiddenLabel = this.createAchievementSummaryChip(summaryPlate, 'SummaryHidden', v3(286, 0, 0), '隐藏收集');
-
-        const gridShell = UiFactory.createRoundRect(
-            felt,
-            'AchievementGridShell',
-            new Size(992, 400),
-            v3(0, -58, 0),
-            withAlpha(SnookerTheme.metal.darkSoft, 188),
-            withAlpha(SnookerTheme.metal.frameBright, 70),
-            28,
-        );
-        this.decorateInsetPlate(
-            gridShell,
-            new Size(992, 400),
-            28,
-            withAlpha(SnookerTheme.metal.darkSoft, 188),
-            withAlpha(SnookerTheme.metal.frameBright, 70),
-        );
-        this.applyInsetPanelSkin(gridShell);
-        this.achievementGrid = UiFactory.ensureNode(gridShell, 'AchievementGrid', v3(0, 0, 0), 940, 356);
-
-        const closeButton = this.createButton(felt, '关闭', v3(426, 228, 0), new Size(146, 52), 'neutral', () => this.closeAchievementPanel());
+        const closeButton = this.mustFindNode(this.achievementPanel, 'AchievementCloseButton');
+        const closeLabel = this.mustFindNode(closeButton, 'ButtonLabel').getComponent(Label)!;
+        this.attachButtonRuntime(closeButton, () => this.closeAchievementPanel());
+        this.restyleButton(closeButton, closeLabel, '关闭', 'neutral');
         this.emphasizeSecondaryButton(closeButton);
+        this.cacheAchievementCardViews();
         this.refreshAchievementPanel();
         this.achievementPanel.active = false;
     }
 
-    private createAchievementSummaryChip(parent: Node, name: string, position: Vec3, title: string): Label {
-        const chip = UiFactory.createRoundRect(
-            parent,
-            name,
-            new Size(256, 58),
-            position,
-            withAlpha(SnookerTheme.metal.darkSoft, 198),
-            withAlpha(SnookerTheme.metal.frameBright, 72),
-            20,
-        );
-        this.decorateInsetPlate(
-            chip,
-            new Size(256, 58),
-            20,
-            withAlpha(SnookerTheme.metal.darkSoft, 198),
-            withAlpha(SnookerTheme.metal.frameBright, 72),
-        );
-        this.applyInsetPanelSkin(chip);
-        const titleLabel = UiFactory.createLabel(chip, `${name}-Title`, title, 16, v3(-64, 0, 0), SnookerTheme.text.secondary, 96, 22);
-        titleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
-        const valueLabel = UiFactory.createLabel(chip, `${name}-Value`, '', 22, v3(64, 0, 0), SnookerTheme.text.primary, 116, 26);
-        valueLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
-        return valueLabel;
+    private cacheAchievementCardViews(): void {
+        this.achievementCardViews = this.achievementGrid.children
+            .filter((node) => node.name.startsWith('AchievementCard-'))
+            .sort((left, right) => {
+                const leftIndex = Number(left.name.split('-').pop() ?? 0);
+                const rightIndex = Number(right.name.split('-').pop() ?? 0);
+                return leftIndex - rightIndex;
+            })
+            .map((root) => ({
+                root,
+                background: root.getComponent(Sprite),
+                pointsBadge: this.mustFindNode(root, 'AchievementPointsBadge').getComponent(Sprite),
+                nameLabel: this.mustFindNode(root, 'AchievementName').getComponent(Label)!,
+                pointsLabel: this.mustFindNode(root, 'AchievementPointsBadge').getChildByName('AchievementPointsLabel')!.getComponent(Label)!,
+                descLabel: this.mustFindNode(root, 'AchievementDesc').getComponent(Label)!,
+                footerLabel: this.mustFindNode(root, 'AchievementFooter').getComponent(Label)!,
+            }));
     }
 
     private openAchievementPanel(): void {
@@ -732,92 +669,46 @@ export class SnookerGame extends Component {
     }
 
     private refreshAchievementPanel(): void {
+        if (this.achievementMenuProgressLabel) {
+            this.achievementMenuProgressLabel.string = `${this.achievementSystem.getUnlockedCount()} / ${this.achievementSystem.getTotalCount()}`;
+        }
         if (!this.achievementPanel || !this.achievementGrid) {
             return;
         }
-        this.achievementMenuProgressLabel.string = `${this.achievementSystem.getUnlockedCount()} / ${this.achievementSystem.getTotalCount()}`;
         this.achievementUnlockedCountLabel.string = `${this.achievementSystem.getUnlockedCount()} / ${this.achievementSystem.getTotalCount()}`;
         this.achievementPointsLabel.string = `${this.achievementSystem.getUnlockedPoints()} / ${this.achievementSystem.getTotalPoints()}`;
         this.achievementHiddenLabel.string = `${this.achievementSystem.getUnlockedHiddenCount()} / ${this.achievementSystem.getHiddenCount()}`;
-
-        this.achievementGrid.removeAllChildren();
         const definitions = this.achievementSystem.getDefinitions();
-        const columnCount = 4;
-        const cardWidth = 220;
-        const cardHeight = 78;
-        const gapX = 14;
-        const gapY = 14;
-        const totalWidth = columnCount * cardWidth + (columnCount - 1) * gapX;
-        const startX = -totalWidth / 2 + cardWidth / 2;
-        const startY = 126;
+        this.achievementCardViews.forEach((view, index) => {
+            const definition = definitions[index];
+            view.root.active = !!definition;
+            if (!definition) {
+                return;
+            }
+            const unlockState = this.achievementSystem.getUnlockState(definition.id);
+            const unlocked = !!unlockState;
+            const displayName = unlocked || !definition.hidden ? definition.name : '???';
+            const description = unlocked || !definition.hidden ? definition.description : '继续突破更多挑战后解锁。';
 
-        definitions.forEach((definition, index) => {
-            const column = index % columnCount;
-            const row = Math.floor(index / columnCount);
-            const x = startX + column * (cardWidth + gapX);
-            const y = startY - row * (cardHeight + gapY);
-            this.buildAchievementCard(definition, v3(x, y, 0), new Size(cardWidth, cardHeight));
+            if (view.background) {
+                view.background.color = unlocked
+                    ? withAlpha(new Color(36, 92, 64, 240), 240)
+                    : withAlpha(SnookerTheme.metal.dark, 214);
+            }
+            if (view.pointsBadge) {
+                view.pointsBadge.color = unlocked
+                    ? withAlpha(SnookerTheme.table.brass, 208)
+                    : withAlpha(SnookerTheme.metal.darkSoft, 210);
+            }
+            view.nameLabel.string = displayName;
+            view.nameLabel.color = SnookerTheme.text.primary;
+            view.pointsLabel.string = `${definition.points}`;
+            view.pointsLabel.color = unlocked ? SnookerTheme.metal.dark : SnookerTheme.text.secondary;
+            view.descLabel.string = description;
+            view.descLabel.color = unlocked ? withAlpha(SnookerTheme.text.primary, 214) : SnookerTheme.text.secondary;
+            view.footerLabel.string = unlocked ? `已解锁 · ${definition.rarity}` : this.getAchievementCardFooter(definition);
+            view.footerLabel.color = unlocked ? SnookerTheme.text.success : SnookerTheme.text.accent;
         });
-    }
-
-    private buildAchievementCard(definition: AchievementDefinition, position: Vec3, size: Size): void {
-        const unlockState = this.achievementSystem.getUnlockState(definition.id);
-        const unlocked = !!unlockState;
-        const card = UiFactory.createRoundRect(
-            this.achievementGrid,
-            `AchievementCard-${definition.id}`,
-            size,
-            position,
-            unlocked ? withAlpha(new Color(36, 92, 64, 240), 240) : withAlpha(SnookerTheme.metal.dark, 214),
-            unlocked ? withAlpha(SnookerTheme.table.brass, 156) : withAlpha(SnookerTheme.metal.frame, 84),
-            20,
-        );
-        this.decorateInsetPlate(
-            card,
-            size,
-            20,
-            unlocked ? withAlpha(new Color(36, 92, 64, 240), 240) : withAlpha(SnookerTheme.metal.dark, 214),
-            unlocked ? withAlpha(SnookerTheme.table.brass, 156) : withAlpha(SnookerTheme.metal.frame, 84),
-        );
-        this.applyInsetPanelSkin(card);
-
-        const displayName = unlocked || !definition.hidden ? definition.name : '???';
-        const description = unlocked || !definition.hidden ? definition.description : '继续突破更多挑战后解锁。';
-        const nameLabel = UiFactory.createLabel(card, 'AchievementName', displayName, 19, v3(-14, 18, 0), SnookerTheme.text.primary, 150, 24);
-        nameLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
-
-        const pointBadge = UiFactory.createRoundRect(
-            card,
-            'AchievementPointsBadge',
-            new Size(56, 24),
-            v3(72, 18, 0),
-            unlocked ? withAlpha(SnookerTheme.table.brass, 208) : withAlpha(SnookerTheme.metal.darkSoft, 210),
-            withAlpha(SnookerTheme.text.accent, unlocked ? 90 : 44),
-            12,
-        );
-        this.decorateLitePanel(
-            pointBadge,
-            new Size(56, 24),
-            12,
-            unlocked ? withAlpha(SnookerTheme.table.brass, 208) : withAlpha(SnookerTheme.metal.darkSoft, 210),
-            withAlpha(SnookerTheme.text.accent, unlocked ? 90 : 44),
-        );
-        UiFactory.createLabel(pointBadge, 'AchievementPointsLabel', `${definition.points}`, 13, v3(0, 0, 0), unlocked ? SnookerTheme.metal.dark : SnookerTheme.text.secondary, 40, 16);
-
-        const descLabel = UiFactory.createLabel(card, 'AchievementDesc', description, 12, v3(0, -4, 0), unlocked ? withAlpha(SnookerTheme.text.primary, 214) : SnookerTheme.text.secondary, 190, 30);
-        descLabel.lineHeight = 14;
-
-        const footerLabel = UiFactory.createLabel(
-            card,
-            'AchievementFooter',
-            unlocked ? `已解锁 · ${definition.rarity}` : this.getAchievementCardFooter(definition),
-            12,
-            v3(0, -25, 0),
-            unlocked ? SnookerTheme.text.success : SnookerTheme.text.accent,
-            190,
-            16,
-        );
-        footerLabel.lineHeight = 14;
     }
 
     private getAchievementCardFooter(definition: AchievementDefinition): string {
@@ -1153,85 +1044,93 @@ export class SnookerGame extends Component {
     }
 
     private buildOverlayLayer(): void {
-        this.overlayLayer = UiFactory.ensureNode(this.node, 'OverlayLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
-        const mask = UiFactory.createRoundRect(this.overlayLayer, 'OverlayMask', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), withAlpha(SnookerTheme.background.vignette, 220));
-        const maskSprite = mask.getComponent(Sprite);
-        if (maskSprite) {
-            maskSprite.color = withAlpha(SnookerTheme.background.vignette, 220);
-        }
-        mask.getComponent(UIOpacity)!.opacity = 210;
-        const panel = UiFactory.createRoundRect(this.overlayLayer, 'OverlayPanel', new Size(590, 392), v3(0, 8, 0), withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110), 30);
-        this.decoratePanel(panel, new Size(590, 392), 30, withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110));
-        this.applyDarkPanelSkin(panel);
-        this.overlayTitleLabel = UiFactory.createLabel(panel, 'OverlayTitle', '', 36, v3(0, 126, 0), SnookerTheme.text.primary, 460, 50);
-        this.overlayDetailLabel = UiFactory.createLabel(panel, 'OverlayDetail', '', 20, v3(0, 32, 0), SnookerTheme.text.secondary, 470, 150);
-        this.overlayStatsContainer = UiFactory.ensureNode(panel, 'OverlayStatsContainer', v3(0, -6, 0), 470, 176);
-        this.overlayStatsContainer.active = false;
-        this.overlayStatsNoteLabel = UiFactory.createLabel(this.overlayStatsContainer, 'OverlayStatsNote', '', 18, v3(0, 84, 0), SnookerTheme.text.secondary, 420, 38);
-        this.overlayStatsNoteLabel.lineHeight = 24;
-        this.overlayStatTitleLabels = [];
-        this.overlayStatValueLabels = [];
-        for (let index = 0; index < 5; index += 1) {
-            const row = UiFactory.createRoundRect(
-                this.overlayStatsContainer,
-                `OverlayStatRow-${index}`,
-                new Size(446, 30),
-                v3(0, 44 - index * 38, 0),
-                withAlpha(SnookerTheme.metal.darkSoft, 152),
-                withAlpha(SnookerTheme.metal.frameBright, 40),
-                17,
-            );
-            this.decorateLitePanel(
-                row,
-                new Size(446, 30),
-                17,
-                withAlpha(SnookerTheme.metal.darkSoft, 152),
-                withAlpha(SnookerTheme.metal.frameBright, 40),
-            );
-            this.applyInsetPanelSkin(row, 20);
-            const titleLabel = UiFactory.createLabel(row, `OverlayStatTitle-${index}`, '', 18, v3(-170, 0, 0), SnookerTheme.text.secondary, 160, 22);
-            titleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
-            const valueLabel = UiFactory.createLabel(row, `OverlayStatValue-${index}`, '', 22, v3(170, 0, 0), SnookerTheme.text.primary, 160, 22);
-            valueLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
-            this.overlayStatTitleLabels.push(titleLabel);
-            this.overlayStatValueLabels.push(valueLabel);
-        }
+        this.overlayLayer = this.mustFindNode(this.node, 'OverlayLayer');
+        this.messagePanel = this.mustFindNode(this.overlayLayer, 'OverlayPanel');
+        this.settingsPanel = this.mustFindNode(this.overlayLayer, 'SettingsPanel');
+        this.settlementPanel = this.mustFindNode(this.overlayLayer, 'SettlementPanel');
 
-        const primaryButton = this.ensureOverlayButton(
-            panel,
-            'OverlayPrimaryButton',
+        const mask = this.mustFindNode(this.overlayLayer, 'OverlayMask');
+        const swallowPointer = (event: any) => {
+            event.propagationStopped = true;
+        };
+        mask.on(Node.EventType.TOUCH_START, swallowPointer, this);
+        mask.on(Node.EventType.TOUCH_END, swallowPointer, this);
+        mask.on(Node.EventType.MOUSE_DOWN, swallowPointer, this);
+        mask.on(Node.EventType.MOUSE_UP, swallowPointer, this);
+
+        this.overlayTitleLabel = this.mustFindNode(this.messagePanel, 'OverlayTitle').getComponent(Label)!;
+        this.overlayDetailLabel = this.mustFindNode(this.messagePanel, 'OverlayDetail').getComponent(Label)!;
+        this.overlayStatsContainer = this.mustFindNode(this.messagePanel, 'OverlayStatsContainer');
+        this.overlayStatsNoteLabel = this.mustFindNode(this.messagePanel, 'OverlayStatsNote').getComponent(Label)!;
+
+        this.overlayPrimaryButton = this.mustFindNode(this.messagePanel, 'OverlayPrimaryButton');
+        this.overlayPrimaryLabel = this.mustFindNode(this.overlayPrimaryButton, 'ButtonLabel').getComponent(Label)!;
+        this.attachButtonRuntime(this.overlayPrimaryButton, () => this.overlayPrimaryAction?.());
+        this.restyleButton(this.overlayPrimaryButton, this.overlayPrimaryLabel, '知道了', 'blue');
+
+        this.overlaySecondaryButton = this.mustFindNode(this.messagePanel, 'OverlaySecondaryButton');
+        this.overlaySecondaryLabel = this.mustFindNode(this.overlaySecondaryButton, 'ButtonLabel').getComponent(Label)!;
+        this.attachButtonRuntime(this.overlaySecondaryButton, () => this.overlaySecondaryAction?.());
+        this.restyleButton(this.overlaySecondaryButton, this.overlaySecondaryLabel, '次要操作', 'green');
+
+        this.overlayTertiaryButton = this.mustFindNode(this.messagePanel, 'OverlayTertiaryButton');
+        this.overlayTertiaryLabel = this.mustFindNode(this.overlayTertiaryButton, 'ButtonLabel').getComponent(Label)!;
+        this.attachButtonRuntime(this.overlayTertiaryButton, () => this.overlayTertiaryAction?.());
+        this.restyleButton(this.overlayTertiaryButton, this.overlayTertiaryLabel, '关闭', 'neutral');
+
+        this.settingsContinueButton = this.mustFindNode(this.settingsPanel, 'SettingsContinueButton');
+        this.attachButtonRuntime(this.settingsContinueButton, () => undefined);
+        this.restyleButton(
+            this.settingsContinueButton,
+            this.mustFindNode(this.settingsContinueButton, 'ButtonLabel').getComponent(Label)!,
             '继续游戏',
-            v3(0, -58, 0),
-            new Size(236, 54),
             'blue',
-            () => this.overlayPrimaryAction?.(),
         );
-        this.overlayPrimaryButton = primaryButton.button;
-        this.overlayPrimaryLabel = primaryButton.label;
-
-        const secondaryButton = this.ensureOverlayButton(
-            panel,
-            'OverlaySecondaryButton',
-            '再来一局',
-            v3(-130, -132, 0),
-            new Size(202, 56),
-            'green',
-            () => this.overlaySecondaryAction?.(),
+        this.settingsRestartButton = this.mustFindNode(this.settingsPanel, 'SettingsRestartButton');
+        this.attachButtonRuntime(this.settingsRestartButton, () => undefined);
+        this.restyleButton(
+            this.settingsRestartButton,
+            this.mustFindNode(this.settingsRestartButton, 'ButtonLabel').getComponent(Label)!,
+            '重开本局',
+            'red',
         );
-        this.overlaySecondaryButton = secondaryButton.button;
-        this.overlaySecondaryLabel = secondaryButton.label;
-
-        const tertiaryButton = this.ensureOverlayButton(
-            panel,
-            'OverlayTertiaryButton',
+        this.settingsHomeButton = this.mustFindNode(this.settingsPanel, 'SettingsHomeButton');
+        this.attachButtonRuntime(this.settingsHomeButton, () => undefined);
+        this.restyleButton(
+            this.settingsHomeButton,
+            this.mustFindNode(this.settingsHomeButton, 'ButtonLabel').getComponent(Label)!,
             '返回主页',
-            v3(130, -132, 0),
-            new Size(202, 56),
             'neutral',
-            () => this.overlayTertiaryAction?.(),
         );
-        this.overlayTertiaryButton = tertiaryButton.button;
-        this.overlayTertiaryLabel = tertiaryButton.label;
+
+        this.settlementTitleLabel = this.mustFindNode(this.settlementPanel, 'SettlementTitle').getComponent(Label)!;
+        this.settlementNoteLabel = this.mustFindNode(this.settlementPanel, 'SettlementNote').getComponent(Label)!;
+        this.settlementStatTitleLabels = [];
+        this.settlementStatValueLabels = [];
+        for (let index = 0; index < 5; index += 1) {
+            this.settlementStatTitleLabels.push(this.mustFindNode(this.settlementPanel, `SettlementStatTitle-${index}`).getComponent(Label)!);
+            this.settlementStatValueLabels.push(this.mustFindNode(this.settlementPanel, `SettlementStatValue-${index}`).getComponent(Label)!);
+        }
+        this.settlementRestartButton = this.mustFindNode(this.settlementPanel, 'SettlementRestartButton');
+        this.attachButtonRuntime(this.settlementRestartButton, () => undefined);
+        this.restyleButton(
+            this.settlementRestartButton,
+            this.mustFindNode(this.settlementRestartButton, 'ButtonLabel').getComponent(Label)!,
+            '再来一局',
+            'green',
+        );
+        this.settlementHomeButton = this.mustFindNode(this.settlementPanel, 'SettlementHomeButton');
+        this.attachButtonRuntime(this.settlementHomeButton, () => undefined);
+        this.restyleButton(
+            this.settlementHomeButton,
+            this.mustFindNode(this.settlementHomeButton, 'ButtonLabel').getComponent(Label)!,
+            '返回菜单',
+            'neutral',
+        );
+
+        this.messagePanel.active = false;
+        this.settingsPanel.active = false;
+        this.settlementPanel.active = false;
         this.overlayLayer.active = false;
     }
 
@@ -1794,13 +1693,7 @@ export class SnookerGame extends Component {
         this.cancelAim();
         this.phase = PlayPhase.Paused;
         this.updateGameplayPresentation();
-        this.showOverlay(
-            '已暂停',
-            '继续即可回到球桌；若想重新组织节奏，可以直接重开这一局，也可以返回主页面重新选择模式。',
-            { label: '继续游戏', style: 'blue', action: () => this.togglePause() },
-            { label: '重开本局', style: 'red', action: () => this.restartCurrentMatch() },
-            { label: '返回主页', style: 'neutral', action: () => this.showMenu() },
-        );
+        this.showSettingsPanel();
     }
 
     private showRuleOverlay(): void {
@@ -1819,6 +1712,16 @@ export class SnookerGame extends Component {
         this.showSettlementLayout();
     }
 
+    private showSettingsPanel(): void {
+        this.overlayLayer.active = true;
+        this.messagePanel.active = false;
+        this.settlementPanel.active = false;
+        this.settingsPanel.active = true;
+        this.setButtonClickAction(this.settingsContinueButton, () => this.togglePause());
+        this.setButtonClickAction(this.settingsRestartButton, () => this.restartCurrentMatch());
+        this.setButtonClickAction(this.settingsHomeButton, () => this.showMenu());
+    }
+
     private showOverlay(
         title: string,
         detail: string,
@@ -1826,6 +1729,10 @@ export class SnookerGame extends Component {
         secondary?: OverlayButtonConfig,
         tertiary?: OverlayButtonConfig,
     ): void {
+        this.overlayLayer.active = true;
+        this.messagePanel.active = true;
+        this.settingsPanel.active = false;
+        this.settlementPanel.active = false;
         this.overlayTitleLabel.string = title;
         this.overlayStatsContainer.active = false;
         this.overlayDetailLabel.node.active = true;
@@ -1843,28 +1750,26 @@ export class SnookerGame extends Component {
             this.overlayTertiaryAction = action;
         });
         this.layoutOverlayButtons();
-        this.overlayLayer.active = true;
     }
 
     private showSettlementOverlay(
         title: string,
         note: string,
         rows: Array<{ title: string; value: string }>,
-        secondary: OverlayButtonConfig,
-        tertiary: OverlayButtonConfig,
     ): void {
-        this.showOverlay(title, '', undefined, secondary, tertiary);
-        this.overlayStatsContainer.active = true;
-        this.overlayDetailLabel.node.setPosition(0, 96, 0);
-        this.overlayDetailLabel.getComponent(UITransform)?.setContentSize(470, 44);
-        this.overlayDetailLabel.lineHeight = 24;
-        this.overlayDetailLabel.string = note;
-        this.overlayStatsNoteLabel.string = '';
-        this.overlayStatTitleLabels.forEach((label, index) => {
+        this.overlayLayer.active = true;
+        this.messagePanel.active = false;
+        this.settingsPanel.active = false;
+        this.settlementPanel.active = true;
+        this.settlementTitleLabel.string = title;
+        this.settlementNoteLabel.string = note;
+        this.settlementStatTitleLabels.forEach((label, index) => {
             const row = rows[index];
             label.string = row?.title ?? '';
-            this.overlayStatValueLabels[index].string = row?.value ?? '';
+            this.settlementStatValueLabels[index].string = row?.value ?? '';
         });
+        this.setButtonClickAction(this.settlementRestartButton, () => this.restartCurrentMatch());
+        this.setButtonClickAction(this.settlementHomeButton, () => this.showMenu());
     }
 
     private setOverlayButton(
@@ -1914,12 +1819,20 @@ export class SnookerGame extends Component {
 
     private hideOverlay(): void {
         this.overlayLayer.active = false;
+        this.messagePanel.active = false;
+        this.settingsPanel.active = false;
+        this.settlementPanel.active = false;
         this.overlayPrimaryAction = null;
         this.overlaySecondaryAction = null;
         this.overlayTertiaryAction = null;
         this.setButtonClickAction(this.overlayPrimaryButton, null);
         this.setButtonClickAction(this.overlaySecondaryButton, null);
         this.setButtonClickAction(this.overlayTertiaryButton, null);
+        this.setButtonClickAction(this.settingsContinueButton, null);
+        this.setButtonClickAction(this.settingsRestartButton, null);
+        this.setButtonClickAction(this.settingsHomeButton, null);
+        this.setButtonClickAction(this.settlementRestartButton, null);
+        this.setButtonClickAction(this.settlementHomeButton, null);
         this.updateGameplayPresentation();
     }
 
@@ -2312,8 +2225,6 @@ export class SnookerGame extends Component {
                 { title: '出杆', value: `${this.shotsUsed}` },
                 { title: '最高分', value: `${this.highScore}` },
             ],
-            { label: '再来一局', style: 'green', action: () => this.restartCurrentMatch() },
-            { label: '返回菜单', style: 'neutral', action: () => this.showMenu() },
         );
     }
 

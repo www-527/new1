@@ -294,6 +294,70 @@ class PrefabBuilder:
         )
         self.items.append({"__type__": "cc.CompPrefabInfo", "fileId": file_id(f"{self.asset_rel}:{node_id}:opacity")})
 
+    def add_label(
+        self,
+        node_id,
+        text,
+        font_size,
+        color=(255, 255, 255, 255),
+        line_height=None,
+        width=220,
+        height=32,
+        position=(0, 0, 0),
+        horizontal_align=1,
+        vertical_align=1,
+        overflow=2,
+    ):
+        label_node = self.add_node(
+            f"Label-{len(self.items)}",
+            node_id,
+            (width, height),
+            pos=position,
+        )
+        comp_id = len(self.items)
+        info_id = comp_id + 1
+        self.items[label_node]["_components"].append({"__id__": comp_id})
+        self.items.append(
+            {
+                "__type__": "cc.Label",
+                "_name": "",
+                "_objFlags": 0,
+                "node": {"__id__": label_node},
+                "_enabled": True,
+                "__prefab": {"__id__": info_id},
+                "_customMaterial": None,
+                "_srcBlendFactor": 2,
+                "_dstBlendFactor": 4,
+                "_color": {
+                    "__type__": "cc.Color",
+                    "r": color[0],
+                    "g": color[1],
+                    "b": color[2],
+                    "a": color[3],
+                },
+                "_string": text,
+                "_horizontalAlign": horizontal_align,
+                "_verticalAlign": vertical_align,
+                "_actualFontSize": font_size,
+                "_fontSize": font_size,
+                "_fontFamily": "Arial",
+                "_lineHeight": line_height or round(font_size * 1.25),
+                "_overflow": overflow,
+                "_enableWrapText": True,
+                "_font": None,
+                "_isSystemFontUsed": True,
+                "_spacingX": 0,
+                "_isItalic": False,
+                "_isBold": False,
+                "_isUnderline": False,
+                "_underlineHeight": 2,
+                "_cacheMode": 0,
+                "_id": "",
+            }
+        )
+        self.items.append({"__type__": "cc.CompPrefabInfo", "fileId": file_id(f"{self.asset_rel}:{label_node}:label")})
+        return label_node
+
     def write(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.items, indent=2) + "\n", encoding="utf-8")
@@ -371,6 +435,69 @@ def build_bottom_hud():
     builder.write(PREFABS / "BottomHud.prefab")
 
 
+def build_achievement_card():
+    builder = PrefabBuilder("AchievementCard", "assets/resources/prefabs/ui/AchievementCard.prefab")
+    root = builder.add_node("AchievementCard", None, (220, 78))
+    builder.add_sprite(root, "resources/textures/ui/panel_inset.png", sliced=True)
+    builder.add_opacity(root)
+
+    badge = builder.add_node("AchievementPointsBadge", root, (56, 24), (72, 18, 0))
+    builder.add_sprite(badge, "resources/textures/ui/top_strip.png", sliced=True)
+    builder.add_label(badge, "10", 13, color=(54, 39, 18, 255), width=40, height=16)
+
+    builder.add_label(
+        root,
+        "成就名称",
+        19,
+        color=(245, 239, 218, 255),
+        width=150,
+        height=24,
+        position=(-14, 18, 0),
+        horizontal_align=0,
+    )
+    builder.add_label(
+        root,
+        "成就描述文本",
+        12,
+        color=(210, 214, 220, 214),
+        line_height=14,
+        width=190,
+        height=30,
+        position=(0, -4, 0),
+    )
+    builder.add_label(
+        root,
+        "普通 · 1",
+        12,
+        color=(212, 183, 104, 255),
+        line_height=14,
+        width=190,
+        height=16,
+        position=(0, -25, 0),
+    )
+    builder.write(PREFABS / "AchievementCard.prefab")
+
+
+def build_achievement_summary_chip():
+    builder = PrefabBuilder("AchievementSummaryChip", "assets/resources/prefabs/ui/AchievementSummaryChip.prefab")
+    root = builder.add_node("AchievementSummaryChip", None, (256, 58))
+    builder.add_sprite(root, "resources/textures/ui/panel_inset.png", sliced=True)
+    builder.add_opacity(root)
+    builder.add_label(root, "已解锁", 16, color=(188, 194, 199, 255), width=96, height=22, position=(-64, 0, 0), horizontal_align=0)
+    builder.add_label(root, "0 / 0", 22, color=(245, 239, 218, 255), width=116, height=26, position=(64, 0, 0), horizontal_align=2)
+    builder.write(PREFABS / "AchievementSummaryChip.prefab")
+
+
+def build_settlement_stat_row():
+    builder = PrefabBuilder("SettlementStatRow", "assets/resources/prefabs/ui/SettlementStatRow.prefab")
+    root = builder.add_node("SettlementStatRow", None, (446, 30))
+    builder.add_sprite(root, "resources/textures/ui/panel_inset.png", sliced=True)
+    builder.add_opacity(root, 236)
+    builder.add_label(root, "得分", 18, color=(188, 194, 199, 255), width=160, height=22, position=(-170, 0, 0), horizontal_align=0)
+    builder.add_label(root, "0", 22, color=(245, 239, 218, 255), width=160, height=22, position=(170, 0, 0), horizontal_align=2)
+    builder.write(PREFABS / "SettlementStatRow.prefab")
+
+
 def main():
     for rel, (w, h, border) in TEXTURE_DEFS.items():
         asset = ROOT / "assets" / rel
@@ -383,6 +510,9 @@ def main():
     build_common_button()
     build_top_hud()
     build_bottom_hud()
+    build_achievement_card()
+    build_achievement_summary_chip()
+    build_settlement_stat_row()
     print("generated prefab and meta assets")
 
 
