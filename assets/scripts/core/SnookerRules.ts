@@ -9,13 +9,13 @@ export class SnookerRules {
         const foulPenalty = cueBallPotted ? 4 : 0;
         const breakDelta = cueBallPotted ? 0 : scoreDelta;
 
-        let message = '本杆未进球，轮到下一次击球。';
+        let message = '\u672c\u6746\u672a\u8fdb\u7403\uff0c\u8f6e\u5230\u4e0b\u4e00\u6b21\u51fb\u7403\u3002';
         if (cueBallPotted && objectBalls.length > 0) {
-            message = `进球 +${scoreDelta}，但白球落袋，犯规 -${foulPenalty}。`;
+            message = `\u8fdb\u7403 +${scoreDelta}\uff0c\u4f46\u767d\u7403\u843d\u888b\uff0c\u72af\u89c4 -${foulPenalty}\u3002`;
         } else if (cueBallPotted) {
-            message = `白球落袋，犯规 -${foulPenalty}。`;
+            message = `\u767d\u7403\u843d\u888b\uff0c\u72af\u89c4 -${foulPenalty}\u3002`;
         } else if (objectBalls.length > 0) {
-            message = `本杆进球 +${scoreDelta}，继续保持手感。`;
+            message = `\u672c\u6746\u8fdb\u7403 +${scoreDelta}\uff0c\u7ee7\u7eed\u4fdd\u6301\u624b\u611f\u3002`;
         }
 
         return {

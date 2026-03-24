@@ -14,33 +14,46 @@ export interface PointerHandlers {
 type SupportedPointerEvent = EventTouch | EventMouse;
 
 export class PointerInput {
-    private readonly transform: UITransform;
+    private target: Node | null;
+    private transform: UITransform | null;
 
-    constructor(private readonly target: Node, private readonly handlers: PointerHandlers) {
+    constructor(target: Node, private readonly handlers: PointerHandlers) {
+        this.target = target;
         this.transform = target.getComponent(UITransform)!;
         this.bind();
     }
 
     public destroy(): void {
-        this.target.off(Node.EventType.TOUCH_START, this.handleStart, this);
-        this.target.off(Node.EventType.TOUCH_MOVE, this.handleMove, this);
-        this.target.off(Node.EventType.TOUCH_END, this.handleEnd, this);
-        this.target.off(Node.EventType.TOUCH_CANCEL, this.handleCancel, this);
-        this.target.off(Node.EventType.MOUSE_DOWN, this.handleStart, this);
-        this.target.off(Node.EventType.MOUSE_MOVE, this.handleMove, this);
-        this.target.off(Node.EventType.MOUSE_UP, this.handleEnd, this);
-        this.target.off(Node.EventType.MOUSE_LEAVE, this.handleCancel, this);
+        const target = this.target;
+        if (target?.isValid) {
+            target.off(Node.EventType.TOUCH_START, this.handleStart, this);
+            target.off(Node.EventType.TOUCH_MOVE, this.handleMove, this);
+            target.off(Node.EventType.TOUCH_END, this.handleEnd, this);
+            target.off(Node.EventType.TOUCH_CANCEL, this.handleCancel, this);
+            target.off(Node.EventType.MOUSE_DOWN, this.handleStart, this);
+            target.off(Node.EventType.MOUSE_MOVE, this.handleMove, this);
+            target.off(Node.EventType.MOUSE_UP, this.handleEnd, this);
+            target.off(Node.EventType.MOUSE_LEAVE, this.handleCancel, this);
+        }
+
+        this.target = null;
+        this.transform = null;
     }
 
     private bind(): void {
-        this.target.on(Node.EventType.TOUCH_START, this.handleStart, this);
-        this.target.on(Node.EventType.TOUCH_MOVE, this.handleMove, this);
-        this.target.on(Node.EventType.TOUCH_END, this.handleEnd, this);
-        this.target.on(Node.EventType.TOUCH_CANCEL, this.handleCancel, this);
-        this.target.on(Node.EventType.MOUSE_DOWN, this.handleStart, this);
-        this.target.on(Node.EventType.MOUSE_MOVE, this.handleMove, this);
-        this.target.on(Node.EventType.MOUSE_UP, this.handleEnd, this);
-        this.target.on(Node.EventType.MOUSE_LEAVE, this.handleCancel, this);
+        const target = this.target;
+        if (!target?.isValid) {
+            return;
+        }
+
+        target.on(Node.EventType.TOUCH_START, this.handleStart, this);
+        target.on(Node.EventType.TOUCH_MOVE, this.handleMove, this);
+        target.on(Node.EventType.TOUCH_END, this.handleEnd, this);
+        target.on(Node.EventType.TOUCH_CANCEL, this.handleCancel, this);
+        target.on(Node.EventType.MOUSE_DOWN, this.handleStart, this);
+        target.on(Node.EventType.MOUSE_MOVE, this.handleMove, this);
+        target.on(Node.EventType.MOUSE_UP, this.handleEnd, this);
+        target.on(Node.EventType.MOUSE_LEAVE, this.handleCancel, this);
     }
 
     private handleStart(event: SupportedPointerEvent): void {
@@ -60,11 +73,18 @@ export class PointerInput {
     }
 
     private toPointerData(event: SupportedPointerEvent): PointerEventData {
+        const transform = this.transform;
+        if (!transform || !transform.node.isValid) {
+            return {
+                local: v2(),
+            };
+        }
+
         const uiLocation = event.getUILocation();
-        const width = this.transform.contentSize.width;
-        const height = this.transform.contentSize.height;
-        const anchorX = this.transform.anchorX;
-        const anchorY = this.transform.anchorY;
+        const width = transform.contentSize.width;
+        const height = transform.contentSize.height;
+        const anchorX = transform.anchorX;
+        const anchorY = transform.anchorY;
 
         return {
             local: v2(

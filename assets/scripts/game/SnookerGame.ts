@@ -1442,35 +1442,67 @@ export class SnookerGame extends Component {
         const remainingScore = this.mode === MatchMode.Level ? Math.max(0, LEVEL_CONFIGS[this.selectedLevelIndex].targetScore - nextScore) : 0;
         if (resolution.cueBallPotted && objectBalls.length > 0) {
             return {
-                text: '?? +' + resolution.scoreDelta + '?????? ? ?? ' + remainingScore + ' ?',
+                text: this.mode === MatchMode.Level
+                    ? `\u8fdb\u7403 +${resolution.scoreDelta}\uff0c\u4f46\u767d\u7403\u72af\u89c4\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
+                    : `\u8fdb\u7403 +${resolution.scoreDelta}\uff0c\u4f46\u767d\u7403\u72af\u89c4`,
                 color: SnookerTheme.text.danger,
             };
         }
         if (resolution.cueBallPotted) {
             return {
-                text: this.mode === MatchMode.Level ? '??????? ? ?? ' + remainingScore + ' ?' : '???????',
+                text: this.mode === MatchMode.Level
+                    ? `\u767d\u7403\u843d\u888b\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
+                    : '\u767d\u7403\u843d\u888b\uff0c\u72af\u89c4',
                 color: SnookerTheme.text.danger,
             };
         }
         if (objectBalls.length === 1) {
             const ball = objectBalls[0];
-            const tail = this.mode === MatchMode.Level ? ' ? ?? ' + remainingScore + ' ?' : ' ? ???? ' + nextScore;
+            const tail = this.mode === MatchMode.Level
+                ? `\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
+                : `\uff0c\u5f53\u524d\u603b\u5206 ${nextScore}`;
             return {
-                text: this.getBallTypeLabel(ball.ballType) + '?? +' + ball.scoreValue + tail,
+                text: `${this.getBattleReportBallTypeLabel(ball.ballType)}\u5165\u888b +${ball.scoreValue}${tail}`,
                 color: SnookerTheme.text.accent,
             };
         }
         if (objectBalls.length > 1) {
-            const tail = this.mode === MatchMode.Level ? ' ? ?? ' + remainingScore + ' ?' : ' ? ???? ' + nextScore;
+            const tail = this.mode === MatchMode.Level
+                ? `\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
+                : `\uff0c\u5f53\u524d\u603b\u5206 ${nextScore}`;
             return {
-                text: '???? x' + objectBalls.length + ' +' + resolution.scoreDelta + tail,
+                text: `\u8fde\u8fdb ${objectBalls.length} \u7403 +${resolution.scoreDelta}${tail}`,
                 color: SnookerTheme.text.accent,
             };
         }
         return {
-            text: this.mode === MatchMode.Level ? '????? ? ?? ' + remainingScore + ' ?' : '????????????',
+            text: this.mode === MatchMode.Level
+                ? `\u672c\u6746\u672a\u5f97\u5206\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
+                : '\u672c\u6746\u672a\u5f97\u5206\uff0c\u7ee7\u7eed\u5bfb\u627e\u673a\u4f1a',
             color: SnookerTheme.text.secondary,
         };
+    }
+
+    private getBattleReportBallTypeLabel(ballType: BallType): string {
+        switch (ballType) {
+            case BallType.Red:
+                return '\u7ea2\u7403';
+            case BallType.Yellow:
+                return '\u9ec4\u7403';
+            case BallType.Green:
+                return '\u7eff\u7403';
+            case BallType.Brown:
+                return '\u68d5\u7403';
+            case BallType.Blue:
+                return '\u84dd\u7403';
+            case BallType.Pink:
+                return '\u7c89\u7403';
+            case BallType.Black:
+                return '\u9ed1\u7403';
+            case BallType.Cue:
+            default:
+                return '\u767d\u7403';
+        }
     }
 
     private shouldSettleMatch(): boolean {
