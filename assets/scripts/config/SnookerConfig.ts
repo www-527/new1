@@ -1,5 +1,5 @@
 import { Color, Size, Vec2, v2 } from 'cc';
-import { BallLayout, BallType, LevelConfig } from '../core/SnookerTypes';
+import { BallLayout, BallType, MatchMode, MatchModeConfig } from '../core/SnookerTypes';
 
 export const DESIGN_SIZE = new Size(1280, 720);
 export const TABLE_OUTER_WIDTH = 1040;
@@ -60,8 +60,7 @@ export const BALL_SCORES: Record<BallType, number> = {
     [BallType.Black]: 7,
 };
 
-function createTriangleReds(anchor: Vec2, spacing = BALL_RADIUS * 2.08): BallLayout[] {
-    const rows = 5;
+function createTriangleReds(anchor: Vec2, rows: number, spacing = BALL_RADIUS * 2.08): BallLayout[] {
     const layouts: BallLayout[] = [];
     let id = 0;
     for (let row = 0; row < rows; row++) {
@@ -81,7 +80,7 @@ function createTriangleReds(anchor: Vec2, spacing = BALL_RADIUS * 2.08): BallLay
 function createStandardOpeningLayouts(): BallLayout[] {
     const redSpacing = BALL_RADIUS * 2.08;
     const redApex = v2(PINK_SPOT.x + redSpacing, 0);
-    const reds = createTriangleReds(redApex, redSpacing);
+    const reds = createTriangleReds(redApex, 5, redSpacing);
     const colors: BallLayout[] = [
         { id: 'yellow-standard', ballType: BallType.Yellow, position: v2(BAULK_LINE_X, -D_RADIUS) },
         { id: 'green-standard', ballType: BallType.Green, position: v2(BAULK_LINE_X, D_RADIUS) },
@@ -93,16 +92,40 @@ function createStandardOpeningLayouts(): BallLayout[] {
     return reds.concat(colors);
 }
 
-export const PRACTICE_LAYOUTS: BallLayout[] = createStandardOpeningLayouts();
+function createCasualOpeningLayouts(): BallLayout[] {
+    const redSpacing = BALL_RADIUS * 2.08;
+    const redApex = v2(PINK_SPOT.x + redSpacing * 0.88, 0);
+    const reds = createTriangleReds(redApex, 4, redSpacing);
+    const colors: BallLayout[] = [
+        { id: 'yellow-casual', ballType: BallType.Yellow, position: v2(BAULK_LINE_X, -D_RADIUS) },
+        { id: 'green-casual', ballType: BallType.Green, position: v2(BAULK_LINE_X, D_RADIUS) },
+        { id: 'blue-casual', ballType: BallType.Blue, position: BLUE_SPOT.clone() },
+        { id: 'black-casual', ballType: BallType.Black, position: BLACK_SPOT.clone() },
+    ];
+    return reds.concat(colors);
+}
 
-export const LEVEL_CONFIGS: LevelConfig[] = Array.from({ length: 10 }, (_, rawIndex) => {
-    const index = rawIndex + 1;
-    return {
-        id: index,
-        name: `第 ${index} 局`,
-        description: '当前统一使用标准斯诺克开局球型，后续可在规则和目标分上继续扩展。',
-        shotLimit: 5 + Math.floor(index / 2),
-        targetScore: 8 + index * 2,
+export const MATCH_MODE_ORDER: MatchMode[] = [MatchMode.Casual, MatchMode.Expert];
+
+export const MATCH_MODE_CONFIGS: Record<MatchMode, MatchModeConfig> = {
+    [MatchMode.Casual]: {
+        mode: MatchMode.Casual,
+        name: '休闲模式',
+        subtitle: '10 红 4 彩，适合快速来一局',
+        description: '减少红球和彩球数量，保留开球、落袋和基础计分体验，适合碎片时间快速清台。',
+        difficultyLabel: '快速开局',
+        redCount: 10,
+        colorCount: 4,
+        ballLayouts: createCasualOpeningLayouts(),
+    },
+    [MatchMode.Expert]: {
+        mode: MatchMode.Expert,
+        name: '专家模式',
+        subtitle: '标准斯诺克开局，完整单人练习',
+        description: '使用完整 15 红 6 彩标准球型，适合连续走位、长杆练习和高分挑战。',
+        difficultyLabel: '标准开局',
+        redCount: 15,
+        colorCount: 6,
         ballLayouts: createStandardOpeningLayouts(),
-    };
-});
+    },
+};

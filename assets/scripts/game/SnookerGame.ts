@@ -25,16 +25,14 @@ import {
     BALL_RADIUS,
     BALL_SCORES,
     CUE_START_POSITION,
-
     DESIGN_SIZE,
     D_RADIUS,
     FIXED_TIME_STEP,
-    LEVEL_CONFIGS,
+    MATCH_MODE_CONFIGS,
     MAX_DRAG_DISTANCE,
     MAX_SHOT_SPEED,
     MIN_SHOT_SPEED,
     POCKET_POSITIONS,
-    PRACTICE_LAYOUTS,
     TABLE_CENTER,
     TABLE_INNER_HEIGHT,
     TABLE_INNER_WIDTH,
@@ -44,7 +42,7 @@ import {
 import { PointerInput } from '../core/PointerInput';
 import { SnookerPhysics } from '../core/SnookerPhysics';
 import { SnookerRules } from '../core/SnookerRules';
-import { BallLayout, BallState, BallType, MatchMode, PlayPhase, ShotResolution } from '../core/SnookerTypes';
+import { BallLayout, BallState, BallType, MatchMode, MatchModeConfig, PlayPhase, ShotResolution } from '../core/SnookerTypes';
 import { TextureSkinner } from '../ui/TextureSkinner';
 import { UiFactory } from '../ui/UiFactory';
 import { shiftColor, SnookerTheme, withAlpha } from '../ui/SnookerTheme';
@@ -53,7 +51,7 @@ const { ccclass } = _decorator;
 const HIGH_SCORE_KEY = 'simple-snooker-high-score';
 const SOUND_KEY = 'simple-snooker-sound-enabled';
 
-type ButtonStyle = 'neutral' | 'blue' | 'green' | 'red';
+type ButtonStyle = 'neutral' | 'blue' | 'green' | 'red' | 'bronze';
 
 interface OverlayButtonConfig {
     label: string;
@@ -80,8 +78,7 @@ type RuntimeButtonNode = Node & {
 export class SnookerGame extends Component {
     private phase = PlayPhase.Menu;
     private resumePhase = PlayPhase.Idle;
-    private mode = MatchMode.Practice;
-    private selectedLevelIndex = 0;
+    private mode = MatchMode.Casual;
     private physics = new SnookerPhysics();
     private rules = new SnookerRules();
     private pointerInput: PointerInput | null = null;
@@ -121,6 +118,7 @@ export class SnookerGame extends Component {
     private menuPreviewBallLayer!: Node;
     private menuThumbnailBallLayer!: Node;
     private menuStartButton!: Node;
+    private menuModeButtons: Node[] = [];
 
     private helperButton!: Node;
     private helperButtonLabel!: Label;
@@ -169,9 +167,10 @@ export class SnookerGame extends Component {
             this.mustFindNode(this.node, 'GameLayer').active = false;
             this.mustFindNode(this.node, 'OverlayLayer').active = false;
             this.bindPointerInput();
-            this.startMatch();
-            console.info('[SnookerGame] onLoad ???????????');
-
+            this.phase = PlayPhase.Menu;
+            this.refreshMenuPreview();
+            this.updateGameplayPresentation();
+            console.info('[SnookerGame] 首屏模式选择已完成初始化。');
         } catch (error) {
             this.showFatalError(error);
         }
@@ -248,6 +247,7 @@ export class SnookerGame extends Component {
             'textures/ui/panel_dark',
             'textures/ui/panel_inset',
             'textures/ui/button_blue',
+            'textures/ui/button_bronze',
             'textures/ui/button_green',
             'textures/ui/button_neutral',
             'textures/ui/button_red',
@@ -317,13 +317,14 @@ export class SnookerGame extends Component {
     private buildMenuLayer(): void {
         this.menuLayer = UiFactory.ensureNode(this.node, 'MenuLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
         this.menuLayer.removeAllChildren();
+        this.menuModeButtons = [];
 
         const titleZone = UiFactory.createRoundRect(this.menuLayer, 'TitleZone', new Size(930, 112), v3(0, 258, 0), withAlpha(SnookerTheme.metal.darkSoft, 168), withAlpha(SnookerTheme.metal.frameBright, 92), 34);
         this.decorateLitePanel(titleZone, new Size(930, 112), 34, withAlpha(SnookerTheme.metal.darkSoft, 168), withAlpha(SnookerTheme.metal.frameBright, 92));
         this.applyTopStripSkin(titleZone);
-        const title = UiFactory.createLabel(titleZone, 'Title', 'SNOOKER BREAK', 58, v3(0, 18, 0), SnookerTheme.text.primary, 760, 64);
-        title.lineHeight = 62;
-        UiFactory.createLabel(titleZone, 'Subtitle', '???????????????????????????', 20, v3(0, -24, 0), SnookerTheme.text.secondary, 760, 32);
+        const title = UiFactory.createLabel(titleZone, 'Title', '斯诺克', 64, v3(0, 18, 0), SnookerTheme.text.primary, 760, 64);
+        title.lineHeight = 66;
+        UiFactory.createLabel(titleZone, 'Subtitle', 'SNOOKER · 选择你的开局节奏', 20, v3(0, -26, 0), SnookerTheme.text.secondary, 760, 32);
 
         const soundChip = this.createButton(this.menuLayer, '', v3(504, 258, 0), new Size(152, 46), 'blue', () => this.toggleSound());
         this.soundButtonLabel = this.mustFindNode(soundChip, 'ButtonLabel').getComponent(Label)!;
@@ -332,27 +333,20 @@ export class SnookerGame extends Component {
         const recordCard = UiFactory.createRoundRect(this.menuLayer, 'RecordCard', new Size(388, 402), v3(-330, -8, 0), withAlpha(SnookerTheme.metal.dark, 210), withAlpha(SnookerTheme.metal.frame, 120), 30);
         this.decoratePanel(recordCard, new Size(388, 402), 30, withAlpha(SnookerTheme.metal.dark, 210), withAlpha(SnookerTheme.metal.frameBright, 108));
         this.applyDarkPanelSkin(recordCard);
-        const levelCard = recordCard;
-        UiFactory.createLabel(levelCard, 'LevelTag', '????', 18, v3(-98, 156, 0), SnookerTheme.text.accent, 120, 28);
-        UiFactory.createLabel(recordCard, 'RecordTagOverlay', '?????', 18, v3(-98, 156, 0), SnookerTheme.text.accent, 120, 28);
-        this.menuModeLabel = UiFactory.createLabel(recordCard, 'ModeLabel', '????', 18, v3(100, 156, 0), SnookerTheme.text.primary, 128, 30);
-        UiFactory.createLabel(recordCard, 'RecordTitle', '??????', 36, v3(0, 94, 0), SnookerTheme.text.primary, 280, 46);
-        this.menuGoalLabel = UiFactory.createLabel(recordCard, 'GoalLabel', '????', 20, v3(0, 66, 0), SnookerTheme.text.accent, 182, 30);
-        this.menuDetailLabel = UiFactory.createLabel(recordCard, 'RecordDetail', '', 18, v3(0, 20, 0), SnookerTheme.text.secondary, 308, 90);
+        UiFactory.createLabel(recordCard, 'LevelTag', '模式情报', 18, v3(-104, 156, 0), SnookerTheme.text.accent, 120, 28);
+        this.menuModeLabel = UiFactory.createLabel(recordCard, 'ModeLabel', '', 18, v3(102, 156, 0), SnookerTheme.text.primary, 128, 30);
+        UiFactory.createLabel(recordCard, 'RecordTitle', '当前模式', 36, v3(0, 96, 0), SnookerTheme.text.primary, 280, 46);
+        this.menuGoalLabel = UiFactory.createLabel(recordCard, 'GoalLabel', '', 20, v3(0, 66, 0), SnookerTheme.text.accent, 240, 30);
+        this.menuDetailLabel = UiFactory.createLabel(recordCard, 'RecordDetail', '', 18, v3(0, 20, 0), SnookerTheme.text.secondary, 308, 96);
 
-        this.menuTargetLabel = this.createStatChip(levelCard, 'TargetChip', v3(-96, -54, 0), '????');
-        this.menuShotLimitLabel = this.createStatChip(levelCard, 'ShotChip', v3(98, -54, 0), '????');
-        this.menuHighScoreLabel = this.createStatChip(levelCard, 'BestChip', v3(0, -120, 0), '????');
+        this.menuTargetLabel = this.createStatChip(recordCard, 'TargetChip', v3(-96, -54, 0), '红球');
+        this.menuShotLimitLabel = this.createStatChip(recordCard, 'ShotChip', v3(98, -54, 0), '彩球');
+        this.menuHighScoreLabel = this.createStatChip(recordCard, 'BestChip', v3(0, -120, 0), '最高分');
 
-        UiFactory.createLabel(this.menuTargetLabel.node.parent!, 'TargetChipTitleOverride', '????', 14, v3(0, 12, 0), SnookerTheme.text.secondary, 130, 18);
-        UiFactory.createLabel(this.menuShotLimitLabel.node.parent!, 'ShotChipTitleOverride', '????', 14, v3(0, 12, 0), SnookerTheme.text.secondary, 130, 18);
-        UiFactory.createLabel(this.menuHighScoreLabel.node.parent!, 'BestChipTitleOverride', '???', 14, v3(0, 12, 0), SnookerTheme.text.secondary, 130, 18);
-
-        const thumbShell = UiFactory.createRoundRect(levelCard, 'LayoutThumbShell', new Size(312, 106), v3(0, -176, 0), withAlpha(SnookerTheme.metal.darkSoft, 200), withAlpha(SnookerTheme.metal.frame, 90), 22);
+        const thumbShell = UiFactory.createRoundRect(recordCard, 'LayoutThumbShell', new Size(312, 106), v3(0, -176, 0), withAlpha(SnookerTheme.metal.darkSoft, 200), withAlpha(SnookerTheme.metal.frame, 90), 22);
         this.decorateInsetPlate(thumbShell, new Size(312, 106), 22, withAlpha(SnookerTheme.metal.darkSoft, 200), withAlpha(SnookerTheme.metal.frameBright, 80));
         this.applyInsetPanelSkin(thumbShell);
-        UiFactory.createLabel(thumbShell, 'ThumbTitle', '??????', 16, v3(-82, 34, 0), SnookerTheme.text.secondary, 120, 24);
-        UiFactory.createLabel(thumbShell, 'ThumbTitleOverlay', '??????', 16, v3(-82, 34, 0), SnookerTheme.text.secondary, 120, 24);
+        UiFactory.createLabel(thumbShell, 'ThumbTitle', '开局缩略图', 16, v3(-74, 34, 0), SnookerTheme.text.secondary, 140, 24);
         const thumbTable = UiFactory.createRoundRect(thumbShell, 'LayoutThumbTable', new Size(256, 58), v3(0, -8, 0), SnookerTheme.table.woodMid, SnookerTheme.table.brass, 18);
         this.decorateWoodShell(thumbTable, new Size(256, 58), 18);
         this.applyWoodSkin(thumbTable);
@@ -364,8 +358,8 @@ export class SnookerGame extends Component {
         const previewCard = UiFactory.createRoundRect(this.menuLayer, 'PreviewCard', new Size(680, 388), v3(198, -2, 0), withAlpha(SnookerTheme.metal.dark, 160), withAlpha(SnookerTheme.metal.frame, 92), 34);
         this.decorateLitePanel(previewCard, new Size(680, 388), 34, withAlpha(SnookerTheme.metal.dark, 160), withAlpha(SnookerTheme.metal.frameBright, 92));
         this.applyDarkPanelSkin(previewCard);
-        UiFactory.createLabel(previewCard, 'PreviewTag', '????', 18, v3(-256, 156, 0), SnookerTheme.text.accent, 120, 24);
-        UiFactory.createLabel(previewCard, 'PreviewGuide', '???????????????????????', 18, v3(-30, 156, 0), SnookerTheme.text.secondary, 400, 24);
+        UiFactory.createLabel(previewCard, 'PreviewTag', '模式选择', 18, v3(-250, 156, 0), SnookerTheme.text.accent, 120, 24);
+        UiFactory.createLabel(previewCard, 'PreviewGuide', '点击任一模式按钮即可直接开局', 18, v3(32, 156, 0), SnookerTheme.text.secondary, 430, 24);
 
         const previewTable = UiFactory.createRoundRect(previewCard, 'PreviewTable', new Size(620, 288), v3(0, -12, 0), SnookerTheme.table.woodMid, SnookerTheme.table.brass, 34);
         this.decorateWoodShell(previewTable, new Size(620, 288), 34);
@@ -373,7 +367,8 @@ export class SnookerGame extends Component {
         const previewFelt = UiFactory.createRoundRect(previewTable, 'PreviewFelt', new Size(560, 226), v3(0, 0, 0), SnookerTheme.table.felt, SnookerTheme.table.feltLight, 22);
         this.decorateFeltSurface(previewFelt, new Size(560, 226), 22);
         this.applyFeltSkin(previewFelt);
-        const previewHalo = UiFactory.ensureNode(previewFelt, 'PreviewHalo', v3(0, 0, 0), 520, 190);
+
+        const previewHalo = UiFactory.ensureNode(previewFelt, 'PreviewHalo', v3(0, -10, 0), 520, 190);
         const previewHaloGraphics = previewHalo.getComponent(Graphics) ?? previewHalo.addComponent(Graphics);
         previewHaloGraphics.clear();
         previewHaloGraphics.fillColor = withAlpha(SnookerTheme.text.accent, 18);
@@ -394,27 +389,57 @@ export class SnookerGame extends Component {
             this.applyPocketSkin(pocketNode);
             this.drawCircleStroke(pocketNode, 16.5, SnookerTheme.table.pocketLip, 3);
         }
-        this.menuPreviewBallLayer = UiFactory.ensureNode(previewFelt, 'PreviewBallLayer', v3(0, 0, 0), 560, 226);
 
-        const previousButton = this.createButton(this.menuLayer, '???', v3(-470, -250, 0), new Size(174, 72), 'neutral', () => this.selectLevel(-1));
-        const nextButton = this.createButton(this.menuLayer, '???', v3(-258, -250, 0), new Size(174, 72), 'neutral', () => this.selectLevel(1));
-        this.emphasizeSecondaryButton(previousButton);
-        this.emphasizeSecondaryButton(nextButton);
+        this.createDecorativeBall(previewFelt, 'MenuRedBall', 18, v2(-234, 50), BALL_COLORS[BallType.Red], true);
+        this.createDecorativeBall(previewFelt, 'MenuYellowBall', 15, v2(228, 74), BALL_COLORS[BallType.Yellow], true);
+        this.createDecorativeBall(previewFelt, 'MenuCueBall', 16, v2(-146, -82), BALL_COLORS[BallType.Cue], true);
+        this.createDecorativeBall(previewFelt, 'MenuBlackBall', 16, v2(174, -98), BALL_COLORS[BallType.Black], true);
+        this.createDecorativeBall(previewFelt, 'MenuBlueBall', 18, v2(242, -126), BALL_COLORS[BallType.Blue], true);
 
-        this.menuStartButton = this.createButton(this.menuLayer, '????', v3(112, -250, 0), new Size(296, 76), 'green', () => this.startLevelMode());
-        this.createButton(this.menuLayer, '????', v3(396, -250, 0), new Size(220, 76), 'blue', () => this.startPracticeMode());
-        this.createButton(this.menuLayer, '????', v3(556, -250, 0), new Size(150, 60), 'neutral', () => this.showRuleOverlay());
-        for (const child of this.menuLayer.children) {
-            if (!child.name.startsWith('Button-') || child.position.y > -200) {
-                continue;
-            }
-            child.active = false;
-        }
-        this.menuStartButton = this.createButton(this.menuLayer, '????', v3(170, -250, 0), new Size(336, 76), 'green', () => this.startMatch());
-        const ruleButton = this.createButton(this.menuLayer, '????', v3(468, -250, 0), new Size(178, 60), 'neutral', () => this.showRuleOverlay());
+        const cueNode = UiFactory.ensureNode(previewFelt, 'MenuCueStick', v3(168, -80, 0), 260, 120);
+        const cueGraphics = cueNode.getComponent(Graphics) ?? cueNode.addComponent(Graphics);
+        cueGraphics.clear();
+        cueGraphics.lineWidth = 14;
+        cueGraphics.strokeColor = new Color(163, 110, 60, 232);
+        cueGraphics.moveTo(-106, -24);
+        cueGraphics.lineTo(94, 40);
+        cueGraphics.stroke();
+        cueGraphics.lineWidth = 4;
+        cueGraphics.strokeColor = withAlpha(Color.WHITE, 116);
+        cueGraphics.moveTo(-106, -24);
+        cueGraphics.lineTo(94, 40);
+        cueGraphics.stroke();
+        cueGraphics.lineWidth = 8;
+        cueGraphics.strokeColor = new Color(56, 106, 188, 220);
+        cueGraphics.moveTo(-110, -26);
+        cueGraphics.lineTo(-90, -20);
+        cueGraphics.stroke();
+
+        this.menuPreviewBallLayer = UiFactory.ensureNode(previewFelt, 'PreviewBallLayer', v3(0, -66, 0), 540, 118);
+
+        const casualButton = this.createModeSelectionButton(
+            previewFelt,
+            MATCH_MODE_CONFIGS[MatchMode.Casual],
+            v3(-150, 22, 0),
+            'bronze',
+            () => this.startMatch(MatchMode.Casual),
+        );
+        const expertButton = this.createModeSelectionButton(
+            previewFelt,
+            MATCH_MODE_CONFIGS[MatchMode.Expert],
+            v3(150, 22, 0),
+            'blue',
+            () => this.startMatch(MatchMode.Expert),
+        );
+        this.menuModeButtons = [casualButton, expertButton];
+        this.menuStartButton = casualButton;
+
+        UiFactory.createLabel(previewFelt, 'ModeTapHint', '选择模式后会直接进入对局', 17, v3(0, 96, 0), withAlpha(Color.WHITE, 180), 320, 22);
+
+        const ruleButton = this.createButton(this.menuLayer, '规则说明', v3(468, -250, 0), new Size(178, 60), 'neutral', () => this.showRuleOverlay());
         this.emphasizeSecondaryButton(ruleButton);
-        this.startMenuPulse();
         this.refreshMenuPreview();
+        this.startMenuPulse();
     }
 
     private buildGameLayer(): void {
@@ -700,6 +725,8 @@ export class SnookerGame extends Component {
     private applyButtonSkin(node: Node, style: ButtonStyle): void {
         const path = style === 'blue'
             ? 'textures/ui/button_blue'
+            : style === 'bronze'
+                ? 'textures/ui/button_bronze'
             : style === 'green'
                 ? 'textures/ui/button_green'
                 : style === 'red'
@@ -813,6 +840,22 @@ export class SnookerGame extends Component {
         return button;
     }
 
+    private createModeSelectionButton(
+        parent: Node,
+        config: MatchModeConfig,
+        position: Vec3,
+        style: ButtonStyle,
+        onClick: () => void,
+    ): Node {
+        const button = this.createButton(parent, config.name, position, new Size(232, 108), style, onClick);
+        const titleLabel = this.mustFindNode(button, 'ButtonLabel').getComponent(Label)!;
+        titleLabel.fontSize = 30;
+        titleLabel.lineHeight = 34;
+        titleLabel.node.setPosition(0, 16, 0);
+        UiFactory.createLabel(button, 'ModeSubtitle', config.subtitle, 15, v3(0, -20, 0), withAlpha(Color.WHITE, 214), 184, 34);
+        return button;
+    }
+
     private setButtonPressed(button: Node, pressed: boolean): void {
         Tween.stopAllByTarget(button);
         tween(button).to(0.08, { scale: pressed ? v3(0.97, 0.97, 1) : v3(1, 1, 1) }).start();
@@ -858,6 +901,8 @@ export class SnookerGame extends Component {
             ? withAlpha(SnookerTheme.button.danger, 255)
             : style === 'green'
                 ? withAlpha(SnookerTheme.button.green, 255)
+                : style === 'bronze'
+                    ? withAlpha(SnookerTheme.button.bronze, 255)
                 : style === 'blue'
                     ? withAlpha(SnookerTheme.button.blue, 255)
                     : withAlpha(SnookerTheme.button.neutral, 255);
@@ -867,6 +912,8 @@ export class SnookerGame extends Component {
         switch (style) {
             case 'blue':
                 return SnookerTheme.button.blue;
+            case 'bronze':
+                return SnookerTheme.button.bronze;
             case 'green':
                 return SnookerTheme.button.green;
             case 'red':
@@ -891,27 +938,38 @@ export class SnookerGame extends Component {
         this.applyButtonSkin(button, style);
     }
 
+    private getCurrentModeConfig(): MatchModeConfig {
+        return MATCH_MODE_CONFIGS[this.mode];
+    }
+
+    private refreshMenuModeButtons(): void {
+        for (const button of this.menuModeButtons) {
+            const mode = button.name.includes(MATCH_MODE_CONFIGS[MatchMode.Expert].name) ? MatchMode.Expert : MatchMode.Casual;
+            const opacity = button.getComponent(UIOpacity) ?? button.addComponent(UIOpacity);
+            opacity.opacity = mode === this.mode ? 255 : 214;
+            button.setScale(mode === this.mode ? v3(1.04, 1.04, 1) : v3(1, 1, 1));
+        }
+    }
+
 
 
     private refreshMenuPreview(animate = false): void {
-        this.menuDetailLabel.string = '??????????????????????????????????';
-        this.menuModeLabel.string = '????';
-        this.menuGoalLabel.string = '????';
-        this.menuTargetLabel.string = '????';
-        this.menuShotLimitLabel.string = '????';
-        this.menuHighScoreLabel.string = this.highScore > 0 ? `${this.highScore} ?` : '????';
-        this.soundButtonLabel.string = this.soundEnabled ? '?? ?' : '?? ?';
+        const config = this.getCurrentModeConfig();
+        this.menuDetailLabel.string = config.description;
+        this.menuModeLabel.string = config.difficultyLabel;
+        this.menuGoalLabel.string = config.subtitle;
+        this.menuTargetLabel.string = `${config.redCount}`;
+        this.menuShotLimitLabel.string = `${config.colorCount}`;
+        this.menuHighScoreLabel.string = this.highScore > 0 ? `${this.highScore} 分` : '暂无';
+        this.soundButtonLabel.string = this.soundEnabled ? '音效 开' : '音效 关';
 
-        this.rebuildPreviewBalls(this.menuPreviewBallLayer, PRACTICE_LAYOUTS, 560, 226, BALL_RADIUS * 0.82, true);
-        this.rebuildPreviewBalls(this.menuThumbnailBallLayer, PRACTICE_LAYOUTS, 228, 34, 4.4, false);
+        this.rebuildPreviewBalls(this.menuPreviewBallLayer, config.ballLayouts, 540, 118, BALL_RADIUS * 0.55, true);
+        this.rebuildPreviewBalls(this.menuThumbnailBallLayer, config.ballLayouts, 228, 34, 4.4, false);
+        this.refreshMenuModeButtons();
 
         if (animate) {
             this.playPreviewSwapAnimation();
         }
-    }
-
-    private selectLevel(_offset: number): void {
-        this.refreshMenuPreview(true);
     }
 
     private rebuildPreviewBalls(container: Node, layouts: BallLayout[], previewWidth: number, previewHeight: number, radius: number, includeCueBall: boolean): void {
@@ -976,34 +1034,17 @@ export class SnookerGame extends Component {
 
 
 
-    private getDifficultySpec(levelIndex: number): { label: string; color: Color } {
-        if (levelIndex <= 2) {
-            return { label: '新手', color: SnookerTheme.text.success };
-        }
-        if (levelIndex <= 6) {
-            return { label: '标准', color: SnookerTheme.text.accent };
-        }
-        return { label: '进阶', color: SnookerTheme.text.info };
-    }
-
-
     private toggleSound(): void {
         this.soundEnabled = !this.soundEnabled;
         this.savePersistentData();
         this.refreshMenuPreview();
     }
 
-    private startPracticeMode(): void {
-        this.startMatch();
-    }
-
-    private startLevelMode(): void {
-        this.startMatch();
-    }
-
-    private startMatch(): void {
-        Tween.stopAllByTarget(this.menuStartButton);
-        this.mode = MatchMode.Practice;
+    private startMatch(mode = this.mode): void {
+        this.mode = mode;
+        for (const button of this.menuModeButtons) {
+            Tween.stopAllByTarget(button);
+        }
         this.score = 0;
         this.currentBreak = 0;
         this.shotsUsed = 0;
@@ -1043,6 +1084,7 @@ export class SnookerGame extends Component {
         this.hideOverlay();
         this.clearAimGuides();
         this.refreshMenuPreview();
+        this.startMenuPulse();
         this.updateGameplayPresentation();
     }
 
@@ -1063,22 +1105,17 @@ export class SnookerGame extends Component {
         this.updateGameplayPresentation();
         this.showOverlay(
             '已暂停',
-            '继续即可回到球桌；若想重新组织节奏，也可以直接重开这一局。',
+            '继续即可回到球桌；若想重新组织节奏，可以直接重开这一局，也可以返回主页面重新选择模式。',
             { label: '继续游戏', style: 'blue', action: () => this.togglePause() },
             { label: '重开本局', style: 'red', action: () => this.restartCurrentMatch() },
+            { label: '返回主页', style: 'neutral', action: () => this.showMenu() },
         );
     }
 
     private showRuleOverlay(): void {
         this.showOverlay(
-           '上手说明',
-            '1. 进入场景后会直接开始固定球型挑战。\n2. 按住白球后方向后拖动，拖动方向即出杆方向，拖得越远力度越大。\n3. 进球会累计 BREAK，白球落袋会被判犯规并扣分。\n4. 清台后会自动结算，本机最高分会自动保存。',
-            { label: '知道了', style: 'blue', action: () => this.hideOverlay() },
-        );
-        return;
-        this.showOverlay(
-            '上手说明',
-            '1. 先选关，再点击开始闯关。\n2. 按住白球后方向后拖动，方向即出杆方向，拖得越远力度越大。\n3. 进球可累计 BREAK，白球落袋会被判犯规。\n4. 闯关模式需要在杆数限制内达到目标分数。',
+            '模式说明',
+            '1. 休闲模式为 10 红 4 彩，适合快速来一局。\n2. 专家模式为标准 15 红 6 彩，用于完整单人练习。\n3. 开球前需要先在 D 区摆放白球，再从白球位置拖拽出杆。\n4. 进球会累计 BREAK，白球落袋会被判犯规并扣分。',
             { label: '知道了', style: 'blue', action: () => this.hideOverlay() },
         );
     }
@@ -1166,24 +1203,28 @@ export class SnookerGame extends Component {
     }
 
     private readonly deferredRestartCurrentMatch = (): void => {
-        this.startMatch();
+        this.startMatch(this.mode);
     };
 
     private startMenuPulse(): void {
-        Tween.stopAllByTarget(this.menuStartButton);
-        tween(this.menuStartButton)
-            .repeatForever(
-                tween(this.menuStartButton)
-                    .to(0.92, { scale: v3(1.03, 1.03, 1) })
-                    .to(0.92, { scale: v3(1, 1, 1) }),
-            )
-            .start();
+        for (const button of this.menuModeButtons) {
+            Tween.stopAllByTarget(button);
+            const baseScale = button.getScale().clone();
+            tween(button)
+                .repeatForever(
+                    tween(button)
+                        .to(0.92, { scale: v3(baseScale.x * 1.03, baseScale.y * 1.03, 1) })
+                        .to(0.92, { scale: baseScale }),
+                )
+                .start();
+        }
     }
 
     private spawnMatchBalls(): void {
+        const config = this.getCurrentModeConfig();
         this.balls = [];
         this.createBall(BallType.Cue, CUE_START_POSITION.clone(), 'cue-ball');
-        PRACTICE_LAYOUTS.forEach((layout, index) => this.createBall(layout.ballType, layout.position.clone(), layout.id ?? `${layout.ballType}-${index}`));
+        config.ballLayouts.forEach((layout, index) => this.createBall(layout.ballType, layout.position.clone(), layout.id ?? `${layout.ballType}-${index}`));
     }
 
     private createBall(ballType: BallType, position: Vec2, id: string): void {
@@ -1224,27 +1265,17 @@ export class SnookerGame extends Component {
 
 
     private refreshHud(): void {
+        const config = this.getCurrentModeConfig();
+        const remainingObjectBalls = this.balls.filter((ball) => !ball.isPotted && ball.ballType !== BallType.Cue);
+        const remainingReds = remainingObjectBalls.filter((ball) => ball.ballType === BallType.Red).length;
+        const remainingColors = remainingObjectBalls.length - remainingReds;
         this.scoreLabel.string = `${this.score}`;
         this.breakLabel.string = `${this.currentBreak}`;
-        if (this.mode === MatchMode.Practice) {
-            const remainingBalls = this.balls.filter((ball) => !ball.isPotted && ball.ballType !== BallType.Cue).length;
-            this.stageLabel.string = '练习模式';
-            this.shotsLabel.string = `已出杆 ${this.shotsUsed} · 已进球 ${this.pottedCount}`;
-            this.targetHintLabel.string = remainingBalls > 0 ? `清台还剩 ${remainingBalls} 颗目标球` : '球桌已清空，准备结算。';
-        } else {
-            const config = LEVEL_CONFIGS[this.selectedLevelIndex];
-            const leftShots = Math.max(0, config.shotLimit - this.shotsUsed);
-            const remainingScore = Math.max(0, config.targetScore - this.score);
-            this.stageLabel.string = config.name;
-            this.shotsLabel.string = `本杆得分 ${this.currentBreak} · 目标 ${config.targetScore}`;
-            this.targetHintLabel.string = remainingScore > 0 ? `距离目标还差 ${remainingScore} 分 · 剩余 ${leftShots} 杆` : `目标已达成，清完球桌即可收官。`;
-        }
-        if (this.mode === MatchMode.Practice) {
-            const remainingBalls = this.balls.filter((ball) => !ball.isPotted && ball.ballType !== BallType.Cue).length;
-            this.stageLabel.string = '最高分挑战';
-            this.shotsLabel.string = `本杆 ${this.currentBreak} · 已进 ${this.pottedCount} · 出杆 ${this.shotsUsed}`;
-            this.targetHintLabel.string = remainingBalls > 0 ? `剩余 ${remainingBalls} 颗目标球 · 最高分 ${this.highScore}` : `球台已清空 · 本地最高分 ${this.highScore}`;
-        }
+        this.stageLabel.string = config.name;
+        this.shotsLabel.string = `本杆 ${this.currentBreak} · 已进 ${this.pottedCount} · 出杆 ${this.shotsUsed}`;
+        this.targetHintLabel.string = remainingObjectBalls.length > 0
+            ? `剩余 ${remainingReds} 红 ${remainingColors} 彩 · ${config.difficultyLabel}`
+            : `${config.name}已清台，准备结算。`;
         this.updateHelperButton();
         this.updateGameplayPresentation();
     }
@@ -1266,17 +1297,6 @@ export class SnookerGame extends Component {
             return;
         }
         this.statusLabel.string = '辅助线已开启，拖动白球即可显示预测线。';
-        return;
-        if (!this.helperAimEnabled) {
-            this.aimGraphics.clear();
-            if (this.phase === PlayPhase.Aiming) {
-                this.statusLabel.string = '辅助线已关闭，仍可继续拖动瞄准。';
-            }
-            return;
-        }
-        if (this.phase === PlayPhase.Aiming) {
-            this.statusLabel.string = '辅助线已开启，命中预测已恢复。';
-        }
     }
 
     private onPointerStart(localInGame: Vec2): void {
@@ -1439,46 +1459,35 @@ export class SnookerGame extends Component {
 
     private composeShotReport(resolution: ShotResolution, nextScore: number): { text: string; color: Color } {
         const objectBalls = this.pottedThisShot.filter((ball) => ball.ballType !== BallType.Cue);
-        const remainingScore = this.mode === MatchMode.Level ? Math.max(0, LEVEL_CONFIGS[this.selectedLevelIndex].targetScore - nextScore) : 0;
+        const remainingBalls = this.balls.filter((ball) => !ball.isPotted && ball.ballType !== BallType.Cue).length;
+        const remainingTail = remainingBalls > 0 ? `，剩余 ${remainingBalls} 球` : '，清台完成';
         if (resolution.cueBallPotted && objectBalls.length > 0) {
             return {
-                text: this.mode === MatchMode.Level
-                    ? `\u8fdb\u7403 +${resolution.scoreDelta}\uff0c\u4f46\u767d\u7403\u72af\u89c4\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
-                    : `\u8fdb\u7403 +${resolution.scoreDelta}\uff0c\u4f46\u767d\u7403\u72af\u89c4`,
+                text: `进球 +${resolution.scoreDelta}，但白球犯规`,
                 color: SnookerTheme.text.danger,
             };
         }
         if (resolution.cueBallPotted) {
             return {
-                text: this.mode === MatchMode.Level
-                    ? `\u767d\u7403\u843d\u888b\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
-                    : '\u767d\u7403\u843d\u888b\uff0c\u72af\u89c4',
+                text: '白球落袋，犯规',
                 color: SnookerTheme.text.danger,
             };
         }
         if (objectBalls.length === 1) {
             const ball = objectBalls[0];
-            const tail = this.mode === MatchMode.Level
-                ? `\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
-                : `\uff0c\u5f53\u524d\u603b\u5206 ${nextScore}`;
             return {
-                text: `${this.getBattleReportBallTypeLabel(ball.ballType)}\u5165\u888b +${ball.scoreValue}${tail}`,
+                text: `${this.getBattleReportBallTypeLabel(ball.ballType)}入袋 +${ball.scoreValue}，当前总分 ${nextScore}${remainingTail}`,
                 color: SnookerTheme.text.accent,
             };
         }
         if (objectBalls.length > 1) {
-            const tail = this.mode === MatchMode.Level
-                ? `\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
-                : `\uff0c\u5f53\u524d\u603b\u5206 ${nextScore}`;
             return {
-                text: `\u8fde\u8fdb ${objectBalls.length} \u7403 +${resolution.scoreDelta}${tail}`,
+                text: `连进 ${objectBalls.length} 球 +${resolution.scoreDelta}，当前总分 ${nextScore}${remainingTail}`,
                 color: SnookerTheme.text.accent,
             };
         }
         return {
-            text: this.mode === MatchMode.Level
-                ? `\u672c\u6746\u672a\u5f97\u5206\uff0c\u8ddd\u76ee\u6807\u8fd8\u5dee ${remainingScore} \u5206`
-                : '\u672c\u6746\u672a\u5f97\u5206\uff0c\u7ee7\u7eed\u5bfb\u627e\u673a\u4f1a',
+            text: remainingBalls > 0 ? '本杆未得分，继续寻找机会' : '本杆未得分，但球桌已经清空',
             color: SnookerTheme.text.secondary,
         };
     }
@@ -1507,36 +1516,27 @@ export class SnookerGame extends Component {
 
     private shouldSettleMatch(): boolean {
         const hasRemainingObjectBall = this.balls.some((ball) => !ball.isPotted && ball.ballType !== BallType.Cue);
-        if (this.mode === MatchMode.Practice) {
-            return !hasRemainingObjectBall;
-        }
-        const config = LEVEL_CONFIGS[this.selectedLevelIndex];
-        const leftShots = Math.max(0, config.shotLimit - this.shotsUsed);
-        return this.score >= config.targetScore || leftShots <= 0 || !hasRemainingObjectBall;
+        return !hasRemainingObjectBall;
     }
 
 
     private showSettlement(): void {
         this.phase = PlayPhase.Settlement;
         this.updateGameplayPresentation();
-        if (this.mode === MatchMode.Practice) {
-            this.showOverlay(
-                this.isNewHighScoreThisMatch ? '?????' : '????',
-                '?????' + this.score + '\n?????' + this.pottedCount + '\n?????' + this.shotsUsed + '\n??????' + this.highScore + '\n'
-                    + (this.isNewHighScoreThisMatch ? '????????????' : '????????????????'),
-                undefined,
-                { label: '????', style: 'green', action: () => this.restartCurrentMatch() },
-            );
-            return;
-        }
-        const passed = this.score >= LEVEL_CONFIGS[this.selectedLevelIndex].targetScore;
-        const config = LEVEL_CONFIGS[this.selectedLevelIndex];
+        const config = this.getCurrentModeConfig();
+        const summary = `模式：${config.name}\n得分：${this.score}\n进球：${this.pottedCount}\n出杆：${this.shotsUsed}\n最高分：${this.highScore}\n${
+            this.isNewHighScoreThisMatch
+                ? '已刷新本地最高分。'
+                : this.mode === MatchMode.Casual
+                    ? '这一局节奏很快，适合马上再来。'
+                    : '标准球型已清台，可以继续冲击更高 BREAK。'
+        }`;
         this.showOverlay(
-            passed ? '????' : '?????',
-            '?????' + this.score + '\n?????' + config.targetScore + '\n?????' + this.pottedCount + '\n?????' + this.shotsUsed + '\n'
-                + (passed ? '????????????????' : '?????????????????'),
+            this.isNewHighScoreThisMatch ? '刷新纪录' : `${config.name}完成`,
+            summary,
             undefined,
-            { label: '????', style: 'green', action: () => this.restartCurrentMatch() },
+            { label: '再来一局', style: 'green', action: () => this.restartCurrentMatch() },
+            { label: '返回菜单', style: 'neutral', action: () => this.showMenu() },
         );
     }
 

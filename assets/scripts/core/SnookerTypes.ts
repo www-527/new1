@@ -12,8 +12,8 @@ export enum BallType {
 }
 
 export enum MatchMode {
-    Practice = 'practice',
-    Level = 'level',
+    Casual = 'casual',
+    Expert = 'expert',
 }
 
 export enum PlayPhase {
@@ -31,12 +31,14 @@ export interface BallLayout {
     position: Vec2;
 }
 
-export interface LevelConfig {
-    id: number;
+export interface MatchModeConfig {
+    mode: MatchMode;
     name: string;
+    subtitle: string;
     description: string;
-    shotLimit: number;
-    targetScore: number;
+    difficultyLabel: string;
+    redCount: number;
+    colorCount: number;
     ballLayouts: BallLayout[];
 }
 
