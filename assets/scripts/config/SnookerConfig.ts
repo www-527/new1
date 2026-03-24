@@ -20,7 +20,14 @@ export const MIN_SHOT_SPEED = 220;
 export const FIXED_TIME_STEP = 1 / 120;
 
 export const TABLE_CENTER = v2(0, -20);
-export const CUE_START_POSITION = v2(-TABLE_INNER_WIDTH * 0.33, 0);
+
+export const BAULK_LINE_X = -TABLE_INNER_WIDTH * 0.25;
+export const D_RADIUS = TABLE_INNER_HEIGHT * 0.17;
+const BLUE_SPOT = v2(0, 0);
+const PINK_SPOT = v2(TABLE_INNER_WIDTH * 0.2, 0);
+const BLACK_SPOT = v2(TABLE_INNER_WIDTH * 0.37, 0);
+
+export const CUE_START_POSITION = v2(BAULK_LINE_X - D_RADIUS * 0.92, 0);
 
 export const POCKET_POSITIONS = [
     v2(-TABLE_INNER_WIDTH / 2, TABLE_INNER_HEIGHT / 2),
@@ -35,7 +42,10 @@ export const BALL_COLORS: Record<BallType, Color> = {
     [BallType.Cue]: new Color(244, 238, 220, 255),
     [BallType.Red]: new Color(205, 42, 48, 255),
     [BallType.Yellow]: new Color(240, 198, 52, 255),
+    [BallType.Green]: new Color(46, 142, 74, 255),
+    [BallType.Brown]: new Color(140, 84, 38, 255),
     [BallType.Blue]: new Color(45, 100, 219, 255),
+    [BallType.Pink]: new Color(242, 122, 168, 255),
     [BallType.Black]: new Color(32, 32, 36, 255),
 };
 
@@ -43,12 +53,15 @@ export const BALL_SCORES: Record<BallType, number> = {
     [BallType.Cue]: 0,
     [BallType.Red]: 1,
     [BallType.Yellow]: 2,
+    [BallType.Green]: 3,
+    [BallType.Brown]: 4,
     [BallType.Blue]: 5,
+    [BallType.Pink]: 6,
     [BallType.Black]: 7,
 };
 
-function createTriangleReds(anchor: Vec2, spacing = BALL_RADIUS * 2.15): BallLayout[] {
-    const rows = 3;
+function createTriangleReds(anchor: Vec2, spacing = BALL_RADIUS * 2.08): BallLayout[] {
+    const rows = 5;
     const layouts: BallLayout[] = [];
     let id = 0;
     for (let row = 0; row < rows; row++) {
@@ -65,52 +78,31 @@ function createTriangleReds(anchor: Vec2, spacing = BALL_RADIUS * 2.15): BallLay
     return layouts;
 }
 
-function createLevelBalls(index: number): BallLayout[] {
-    const redAnchorX = -40 + (index % 4) * 28;
-    const redAnchorY = ((index % 3) - 1) * 36;
-    const reds = createTriangleReds(v2(redAnchorX, redAnchorY));
-
-    const colorOffset = index * 8;
+function createStandardOpeningLayouts(): BallLayout[] {
+    const redSpacing = BALL_RADIUS * 2.08;
+    const redApex = v2(PINK_SPOT.x + redSpacing, 0);
+    const reds = createTriangleReds(redApex, redSpacing);
     const colors: BallLayout[] = [
-        {
-            id: `yellow-${index}`,
-            ballType: BallType.Yellow,
-            position: v2(180 + (index % 2) * 36, 140 - colorOffset * 0.4),
-        },
-        {
-            id: `blue-${index}`,
-            ballType: BallType.Blue,
-            position: v2(120 - (index % 3) * 40, 0 + (index % 2 === 0 ? 40 : -40)),
-        },
-        {
-            id: `black-${index}`,
-            ballType: BallType.Black,
-            position: v2(300 - (index % 4) * 22, -140 + colorOffset * 0.35),
-        },
+        { id: 'yellow-standard', ballType: BallType.Yellow, position: v2(BAULK_LINE_X, -D_RADIUS) },
+        { id: 'green-standard', ballType: BallType.Green, position: v2(BAULK_LINE_X, D_RADIUS) },
+        { id: 'brown-standard', ballType: BallType.Brown, position: v2(BAULK_LINE_X, 0) },
+        { id: 'blue-standard', ballType: BallType.Blue, position: BLUE_SPOT.clone() },
+        { id: 'pink-standard', ballType: BallType.Pink, position: PINK_SPOT.clone() },
+        { id: 'black-standard', ballType: BallType.Black, position: BLACK_SPOT.clone() },
     ];
-
     return reds.concat(colors);
 }
 
-export const PRACTICE_LAYOUTS: BallLayout[] = [
-    ...createTriangleReds(v2(-20, 0)),
-    { id: 'yellow-practice', ballType: BallType.Yellow, position: v2(250, -10) },
-    { id: 'blue-practice', ballType: BallType.Blue, position: v2(120, 0) },
-    { id: 'black-practice', ballType: BallType.Black, position: v2(-260, -170) },
-];
+export const PRACTICE_LAYOUTS: BallLayout[] = createStandardOpeningLayouts();
 
 export const LEVEL_CONFIGS: LevelConfig[] = Array.from({ length: 10 }, (_, rawIndex) => {
     const index = rawIndex + 1;
     return {
         id: index,
-        name: `第 ${index} 关`,
-        description: index <= 3
-            ? '开放布局，适合熟悉拖拽瞄准和落袋节奏。'
-            : index <= 7
-                ? '红球更靠近中台，需要更稳的力度控制。'
-                : '彩球角度刁钻，建议先清理挡线路径。',
+        name: `第 ${index} 局`,
+        description: '当前统一使用标准斯诺克开局球型，后续可在规则和目标分上继续扩展。',
         shotLimit: 5 + Math.floor(index / 2),
         targetScore: 8 + index * 2,
-        ballLayouts: createLevelBalls(index),
+        ballLayouts: createStandardOpeningLayouts(),
     };
 });

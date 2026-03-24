@@ -4,7 +4,10 @@ export enum BallType {
     Cue = 'cue',
     Red = 'red',
     Yellow = 'yellow',
+    Green = 'green',
+    Brown = 'brown',
     Blue = 'blue',
+    Pink = 'pink',
     Black = 'black',
 }
 
