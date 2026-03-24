@@ -67,4 +67,12 @@ export interface ShotResolution {
     message: string;
 }
 
+export interface PhysicsStepResult {
+    pottedBalls: BallState[];
+    strongestBallCollisionSpeed: number;
+    strongestRailCollisionSpeed: number;
+    ballCollisionCount: number;
+    railCollisionCount: number;
+}
+
 

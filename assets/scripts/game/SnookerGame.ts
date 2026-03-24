@@ -45,9 +45,10 @@ import {
 } from '../config/SnookerConfig';
 import { AchievementSystem } from '../core/AchievementSystem';
 import { PointerInput } from '../core/PointerInput';
+import { SnookerAudio } from '../core/SnookerAudio';
 import { SnookerPhysics } from '../core/SnookerPhysics';
 import { SnookerRules } from '../core/SnookerRules';
-import { BallLayout, BallState, BallType, MatchMode, MatchModeConfig, PlayPhase, ShotResolution } from '../core/SnookerTypes';
+import { BallLayout, BallState, BallType, MatchMode, MatchModeConfig, PhysicsStepResult, PlayPhase, ShotResolution } from '../core/SnookerTypes';
 import { TextureSkinner } from '../ui/TextureSkinner';
 import { UiFactory } from '../ui/UiFactory';
 import { shiftColor, SnookerTheme, withAlpha } from '../ui/SnookerTheme';
@@ -66,6 +67,7 @@ interface OverlayButtonConfig {
 
 interface ButtonOptions {
     holdDurationMs?: number;
+    muteClickSound?: boolean;
 }
 
 interface CollisionPrediction {
@@ -77,6 +79,7 @@ interface CollisionPrediction {
 
 type RuntimeButtonNode = Node & {
     __snookerClickAction?: (() => void) | null;
+    __snookerButtonBound?: boolean;
 };
 
 @ccclass('SnookerGame')
@@ -87,6 +90,7 @@ export class SnookerGame extends Component {
     private physics = new SnookerPhysics();
     private rules = new SnookerRules();
     private achievementSystem = new AchievementSystem();
+    private audio = new SnookerAudio();
     private pointerInput: PointerInput | null = null;
 
     private menuLayer!: Node;
@@ -122,7 +126,8 @@ export class SnookerGame extends Component {
     private menuTargetLabel!: Label;
     private menuShotLimitLabel!: Label;
     private menuHighScoreLabel!: Label;
-    private soundButtonLabel!: Label;
+    private soundButton: Node | null = null;
+    private soundButtonLabel: Label | null = null;
     private menuPreviewBallLayer!: Node;
     private menuThumbnailBallLayer!: Node;
     private menuStartButton!: Node;
@@ -156,6 +161,8 @@ export class SnookerGame extends Component {
     private achievementToastPointsLabel!: Label;
     private achievementToastQueue: AchievementDefinition[] = [];
     private isAchievementToastPlaying = false;
+    private lastBallCollisionAudioAt = 0;
+    private lastRailCollisionAudioAt = 0;
 
     private balls: BallState[] = [];
     private pottedThisShot: BallState[] = [];
@@ -183,6 +190,7 @@ export class SnookerGame extends Component {
         try {
             this.initializeRoot();
             this.loadPersistentData();
+            this.audio.setEnabled(this.soundEnabled);
             this.preloadTextures();
             this.buildSceneGraph();
             this.mustFindNode(this.node, 'MenuLayer').active = true;
@@ -201,6 +209,7 @@ export class SnookerGame extends Component {
     protected onDestroy(): void {
         this.pointerInput?.destroy();
         this.pointerInput = null;
+        this.audio.dispose();
     }
 
     protected update(deltaTime: number): void {
@@ -208,15 +217,31 @@ export class SnookerGame extends Component {
             return;
         }
 
+        let strongestBallCollisionSpeed = 0;
+        let strongestRailCollisionSpeed = 0;
+        let ballCollisionCount = 0;
+        let railCollisionCount = 0;
         this.physicsAccumulator += Math.min(deltaTime, 0.033);
         while (this.physicsAccumulator >= FIXED_TIME_STEP) {
             this.physicsAccumulator -= FIXED_TIME_STEP;
-            const pottedBalls = this.physics.step(this.balls, POCKET_POSITIONS, FIXED_TIME_STEP);
-            if (pottedBalls.length > 0) {
-                this.onBallsPotted(pottedBalls);
+            const stepResult = this.physics.step(this.balls, POCKET_POSITIONS, FIXED_TIME_STEP);
+            if (stepResult.pottedBalls.length > 0) {
+                this.onBallsPotted(stepResult.pottedBalls);
             }
+            strongestBallCollisionSpeed = Math.max(strongestBallCollisionSpeed, stepResult.strongestBallCollisionSpeed);
+            strongestRailCollisionSpeed = Math.max(strongestRailCollisionSpeed, stepResult.strongestRailCollisionSpeed);
+            ballCollisionCount += stepResult.ballCollisionCount;
+            railCollisionCount += stepResult.railCollisionCount;
             this.syncBallVisuals();
         }
+
+        this.playFramePhysicsSounds({
+            pottedBalls: [],
+            strongestBallCollisionSpeed,
+            strongestRailCollisionSpeed,
+            ballCollisionCount,
+            railCollisionCount,
+        });
 
         if (this.physics.areAllBallsStopped(this.balls)) {
             this.finishCurrentShot();
@@ -245,6 +270,7 @@ export class SnookerGame extends Component {
             this.achievementSystem.load();
             console.warn('[SnookerGame] 读取本地存档失败，已使用默认值。', error);
         }
+        this.audio.setEnabled(this.soundEnabled);
     }
 
     private savePersistentData(): void {
@@ -257,10 +283,15 @@ export class SnookerGame extends Component {
     }
 
     private buildSceneGraph(): void {
+        const overlayLayer = this.node.getChildByName('OverlayLayer');
+        overlayLayer?.removeFromParent();
         this.node.removeAllChildren();
         this.buildBackground();
         this.buildMenuLayerLite();
         this.buildGameLayer();
+        if (overlayLayer) {
+            this.node.addChild(overlayLayer);
+        }
         this.buildOverlayLayer();
         this.buildAchievementToast();
     }
@@ -351,9 +382,11 @@ export class SnookerGame extends Component {
         title.lineHeight = 66;
         UiFactory.createLabel(titleZone, 'Subtitle', 'SNOOKER · 选择你的开局节奏', 20, v3(0, -26, 0), SnookerTheme.text.secondary, 760, 32);
 
-        const soundChip = this.createButton(this.menuLayer, '', v3(504, 258, 0), new Size(152, 46), 'blue', () => this.toggleSound());
+        const soundChip = this.createButton(this.menuLayer, '', v3(504, 258, 0), new Size(152, 46), 'blue', () => this.toggleSound(), { muteClickSound: true });
+        this.soundButton = soundChip;
         this.soundButtonLabel = this.mustFindNode(soundChip, 'ButtonLabel').getComponent(Label)!;
         this.soundButtonLabel.fontSize = 18;
+        this.syncSoundButtonState();
 
         const recordCard = UiFactory.createRoundRect(this.menuLayer, 'RecordCard', new Size(388, 402), v3(-330, -8, 0), withAlpha(SnookerTheme.metal.dark, 210), withAlpha(SnookerTheme.metal.frame, 120), 30);
         this.decoratePanel(recordCard, new Size(388, 402), 30, withAlpha(SnookerTheme.metal.dark, 210), withAlpha(SnookerTheme.metal.frameBright, 108));
@@ -548,6 +581,10 @@ export class SnookerGame extends Component {
 
         const ruleButton = this.createButton(menuTable, '规则说明', v3(254, -272, 0), new Size(176, 58), 'neutral', () => this.showRuleOverlay());
         this.emphasizeSecondaryButton(ruleButton);
+        this.soundButton = this.createButton(menuTable, '', v3(470, -272, 0), new Size(158, 58), 'blue', () => this.toggleSound(), { muteClickSound: true });
+        this.soundButtonLabel = this.mustFindNode(this.soundButton, 'ButtonLabel').getComponent(Label)!;
+        this.soundButtonLabel.fontSize = 19;
+        this.syncSoundButtonState();
     }
 
     private buildAchievementPanel(): void {
@@ -848,6 +885,7 @@ export class SnookerGame extends Component {
         this.achievementToastDetailLabel.string = definition.name;
         this.achievementToastPointsLabel.string = `+${definition.points}`;
         this.achievementToastNode.active = true;
+        this.audio.play('achievement', { intensity: 0.94 });
         this.achievementToastNode.setPosition(0, 296, 0);
         const opacity = this.achievementToastNode.getComponent(UIOpacity) ?? this.achievementToastNode.addComponent(UIOpacity);
         opacity.opacity = 0;
@@ -1044,6 +1082,9 @@ export class SnookerGame extends Component {
         this.shotsLabel = UiFactory.createLabel(progressCard, 'ShotsLabel', '', 18, v3(0, -6, 0), SnookerTheme.text.accent, 360, 22);
         this.targetHintLabel = UiFactory.createLabel(progressCard, 'TargetHintLabel', '', 16, v3(0, -26, 0), SnookerTheme.text.secondary, 360, 20);
 
+        const settlementTestButton = this.createButton(this.topHud, '测结算', v3(406, 0, 0), new Size(116, 54), 'bronze', () => this.showSettlementPreview());
+        const settlementTestLabel = this.mustFindNode(settlementTestButton, 'ButtonLabel').getComponent(Label)!;
+        settlementTestLabel.fontSize = 20;
         this.createButton(this.topHud, '||', v3(520, 0, 0), new Size(72, 54), 'blue', () => this.togglePause());
     }
 
@@ -1113,8 +1154,11 @@ export class SnookerGame extends Component {
 
     private buildOverlayLayer(): void {
         this.overlayLayer = UiFactory.ensureNode(this.node, 'OverlayLayer', v3(0, 0, 0), DESIGN_SIZE.width, DESIGN_SIZE.height);
-        this.overlayLayer.removeAllChildren();
         const mask = UiFactory.createRoundRect(this.overlayLayer, 'OverlayMask', new Size(DESIGN_SIZE.width, DESIGN_SIZE.height), v3(0, 0, 0), withAlpha(SnookerTheme.background.vignette, 220));
+        const maskSprite = mask.getComponent(Sprite);
+        if (maskSprite) {
+            maskSprite.color = withAlpha(SnookerTheme.background.vignette, 220);
+        }
         mask.getComponent(UIOpacity)!.opacity = 210;
         const panel = UiFactory.createRoundRect(this.overlayLayer, 'OverlayPanel', new Size(590, 392), v3(0, 8, 0), withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110), 30);
         this.decoratePanel(panel, new Size(590, 392), 30, withAlpha(SnookerTheme.metal.dark, 224), withAlpha(SnookerTheme.metal.frameBright, 110));
@@ -1144,6 +1188,7 @@ export class SnookerGame extends Component {
                 withAlpha(SnookerTheme.metal.darkSoft, 152),
                 withAlpha(SnookerTheme.metal.frameBright, 40),
             );
+            this.applyInsetPanelSkin(row, 20);
             const titleLabel = UiFactory.createLabel(row, `OverlayStatTitle-${index}`, '', 18, v3(-170, 0, 0), SnookerTheme.text.secondary, 160, 22);
             titleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
             const valueLabel = UiFactory.createLabel(row, `OverlayStatValue-${index}`, '', 22, v3(170, 0, 0), SnookerTheme.text.primary, 160, 22);
@@ -1152,15 +1197,66 @@ export class SnookerGame extends Component {
             this.overlayStatValueLabels.push(valueLabel);
         }
 
-        this.overlayPrimaryButton = this.createButton(panel, '继续游戏', v3(0, -38, 0), new Size(236, 54), 'blue', () => this.overlayPrimaryAction?.());
-        this.overlayPrimaryLabel = this.mustFindNode(this.overlayPrimaryButton, 'ButtonLabel').getComponent(Label)!;
+        const primaryButton = this.ensureOverlayButton(
+            panel,
+            'OverlayPrimaryButton',
+            '继续游戏',
+            v3(0, -58, 0),
+            new Size(236, 54),
+            'blue',
+            () => this.overlayPrimaryAction?.(),
+        );
+        this.overlayPrimaryButton = primaryButton.button;
+        this.overlayPrimaryLabel = primaryButton.label;
 
-        this.overlaySecondaryButton = this.createButton(panel, '再来一局', v3(-130, -112, 0), new Size(202, 56), 'green', () => this.overlaySecondaryAction?.());
-        this.overlaySecondaryLabel = this.mustFindNode(this.overlaySecondaryButton, 'ButtonLabel').getComponent(Label)!;
+        const secondaryButton = this.ensureOverlayButton(
+            panel,
+            'OverlaySecondaryButton',
+            '再来一局',
+            v3(-130, -132, 0),
+            new Size(202, 56),
+            'green',
+            () => this.overlaySecondaryAction?.(),
+        );
+        this.overlaySecondaryButton = secondaryButton.button;
+        this.overlaySecondaryLabel = secondaryButton.label;
 
-        this.overlayTertiaryButton = this.createButton(panel, '返回主页', v3(130, -112, 0), new Size(202, 56), 'neutral', () => this.overlayTertiaryAction?.());
-        this.overlayTertiaryLabel = this.mustFindNode(this.overlayTertiaryButton, 'ButtonLabel').getComponent(Label)!;
+        const tertiaryButton = this.ensureOverlayButton(
+            panel,
+            'OverlayTertiaryButton',
+            '返回主页',
+            v3(130, -132, 0),
+            new Size(202, 56),
+            'neutral',
+            () => this.overlayTertiaryAction?.(),
+        );
+        this.overlayTertiaryButton = tertiaryButton.button;
+        this.overlayTertiaryLabel = tertiaryButton.label;
         this.overlayLayer.active = false;
+    }
+
+    private ensureOverlayButton(
+        parent: Node,
+        name: string,
+        text: string,
+        position: Vec3,
+        size: Size,
+        style: ButtonStyle,
+        onClick: () => void,
+    ): { button: Node; label: Label } {
+        let button = parent.getChildByName(name);
+        if (!button) {
+            button = this.createButton(parent, text, position, size, style, onClick);
+            button.name = name;
+        } else {
+            button.setPosition(position);
+            const transform = button.getComponent(UITransform) ?? button.addComponent(UITransform);
+            transform.setContentSize(size.width, size.height);
+        }
+        const label = UiFactory.createLabel(button, 'ButtonLabel', text, 21, v3(0, 0, 0), SnookerTheme.text.primary, size.width - 24, size.height - 8);
+        this.attachButtonRuntime(button, onClick);
+        this.restyleButton(button, label, text, style);
+        return { button, label };
     }
 
     private decoratePanel(node: Node, size: Size, radius: number, fillColor: Color, frameColor: Color): void {
@@ -1334,16 +1430,29 @@ export class SnookerGame extends Component {
     private createButton(parent: Node, text: string, position: Vec2 | Vec3, size: Size, style: ButtonStyle, onClick: () => void, options?: ButtonOptions): Node {
         const fillColor = this.getButtonFillColor(style);
         const button = UiFactory.createRoundRect(parent, `Button-${text}`, size, position, fillColor, shiftColor(fillColor, 42), 18);
-        const runtimeButton = button as RuntimeButtonNode;
-        runtimeButton.__snookerClickAction = onClick;
         this.applySceneButtonSkin(button, style);
         this.decorateButton(button, size, fillColor);
         this.applyButtonSkin(button, style);
         UiFactory.createLabel(button, 'ButtonLabel', text, 21, v3(0, 0, 0), SnookerTheme.text.primary, size.width - 24, size.height - 8);
+        this.attachButtonRuntime(button, onClick, options);
+        return button;
+    }
 
+    private attachButtonRuntime(button: Node, onClick: () => void, options?: ButtonOptions): void {
+        const runtimeButton = button as RuntimeButtonNode;
+        runtimeButton.__snookerClickAction = onClick;
+        if (runtimeButton.__snookerButtonBound) {
+            return;
+        }
+        runtimeButton.__snookerButtonBound = true;
         let holdTimer: ReturnType<typeof setTimeout> | null = null;
-        let holdTriggered = false;
         let suppressMouseUntil = 0;
+        const triggerClick = () => {
+            if (!options?.muteClickSound) {
+                this.audio.play('uiTap', { intensity: 0.68 });
+            }
+            runtimeButton.__snookerClickAction?.();
+        };
         const clearHoldTimer = () => {
             if (holdTimer !== null) {
                 clearTimeout(holdTimer);
@@ -1360,16 +1469,15 @@ export class SnookerGame extends Component {
             } else if (shouldIgnoreMouse()) {
                 return;
             }
+            this.audio.unlock();
             this.setButtonPressed(button, true);
             if (!options?.holdDurationMs) {
                 return;
             }
-            holdTriggered = false;
             clearHoldTimer();
             holdTimer = setTimeout(() => {
-                holdTriggered = true;
                 this.setButtonPressed(button, false);
-                onClick();
+                triggerClick();
             }, options.holdDurationMs);
         };
         const handler = (isTouch: boolean) => {
@@ -1381,10 +1489,9 @@ export class SnookerGame extends Component {
             clearHoldTimer();
             this.setButtonPressed(button, false);
             if (options?.holdDurationMs) {
-                holdTriggered = false;
                 return;
             }
-            runtimeButton.__snookerClickAction?.();
+            triggerClick();
         };
         const pressOut = (isTouch: boolean) => {
             if (isTouch) {
@@ -1393,7 +1500,6 @@ export class SnookerGame extends Component {
                 return;
             }
             clearHoldTimer();
-            holdTriggered = false;
             this.setButtonPressed(button, false);
         };
         button.on(Node.EventType.TOUCH_START, () => pressIn(true), this);
@@ -1402,7 +1508,6 @@ export class SnookerGame extends Component {
         button.on(Node.EventType.MOUSE_DOWN, () => pressIn(false), this);
         button.on(Node.EventType.MOUSE_UP, () => handler(false), this);
         button.on(Node.EventType.MOUSE_LEAVE, () => pressOut(false), this);
-        return button;
     }
 
     private createModeSelectionButton(
@@ -1516,10 +1621,25 @@ export class SnookerGame extends Component {
         }
     }
 
+    private syncSoundButtonState(): void {
+        if (!this.soundButton || !this.soundButtonLabel || !this.soundButton.isValid || !this.soundButtonLabel.node.isValid) {
+            return;
+        }
+        const soundToggleLabel = this.soundEnabled ? '\u97f3\u6548\uff1a\u5f00' : '\u97f3\u6548\uff1a\u5173';
+        this.restyleButton(
+            this.soundButton,
+            this.soundButtonLabel,
+            soundToggleLabel,
+            this.soundEnabled ? 'blue' : 'neutral',
+        );
+        this.soundButtonLabel.fontSize = 19;
+    }
+
 
 
     private refreshMenuPreview(animate = false): void {
         this.refreshMenuModeButtons();
+        this.syncSoundButtonState();
 
         if (animate) {
             this.playPreviewSwapAnimation();
@@ -1578,8 +1698,30 @@ export class SnookerGame extends Component {
 
     private toggleSound(): void {
         this.soundEnabled = !this.soundEnabled;
+        this.audio.setEnabled(this.soundEnabled);
         this.savePersistentData();
         this.refreshMenuPreview();
+        if (this.soundEnabled) {
+            this.audio.play('uiTap', { intensity: 0.8 });
+        }
+    }
+
+    private playFramePhysicsSounds(stepResult: PhysicsStepResult): void {
+        const now = Date.now();
+        if (stepResult.ballCollisionCount > 0 && stepResult.strongestBallCollisionSpeed > 16 && now - this.lastBallCollisionAudioAt >= 46) {
+            const intensity = Math.max(0.3, Math.min(1.18,
+                stepResult.strongestBallCollisionSpeed / 360 + Math.min(0.2, (stepResult.ballCollisionCount - 1) * 0.04),
+            ));
+            this.audio.play('ballCollision', { intensity });
+            this.lastBallCollisionAudioAt = now;
+        }
+        if (stepResult.railCollisionCount > 0 && stepResult.strongestRailCollisionSpeed > 24 && now - this.lastRailCollisionAudioAt >= 64) {
+            const intensity = Math.max(0.26, Math.min(1.05,
+                stepResult.strongestRailCollisionSpeed / 420 + Math.min(0.16, (stepResult.railCollisionCount - 1) * 0.03),
+            ));
+            this.audio.play('railCollision', { intensity });
+            this.lastRailCollisionAudioAt = now;
+        }
     }
 
     private startMatch(mode = this.mode): void {
@@ -1667,6 +1809,14 @@ export class SnookerGame extends Component {
             '1. 休闲模式为 10 红 4 彩，适合快速来一局。\n2. 专家模式为标准 15 红 6 彩，用于完整单人练习。\n3. 开球前需要先在 D 区摆放白球，再从白球位置拖拽出杆。\n4. 进球会累计 BREAK，白球落袋会被判犯规并扣分。',
             { label: '知道了', style: 'blue', action: () => this.hideOverlay() },
         );
+    }
+
+    private showSettlementPreview(): void {
+        if (this.phase === PlayPhase.Menu || this.phase === PlayPhase.Settlement) {
+            return;
+        }
+        this.cancelAim();
+        this.showSettlementLayout();
     }
 
     private showOverlay(
@@ -1876,6 +2026,7 @@ export class SnookerGame extends Component {
     }
 
     private onPointerStart(localInGame: Vec2): void {
+        this.audio.unlock();
         if (this.phase !== PlayPhase.Idle) {
             return;
         }
@@ -1949,6 +2100,7 @@ export class SnookerGame extends Component {
         const powerRatio = math.clamp01(dragDistance / MAX_DRAG_DISTANCE);
         const shotSpeed = MIN_SHOT_SPEED + (MAX_SHOT_SPEED - MIN_SHOT_SPEED) * powerRatio;
         cueBall.velocity = shotVector.normalize().multiplyScalar(shotSpeed);
+        this.audio.play('cueStrike', { intensity: Math.max(0.35, Math.min(1.2, powerRatio + 0.3)) });
         this.openingCuePlacementPending = false;
         this.phase = PlayPhase.Moving;
         this.currentAimPointerOnTable = null;
@@ -1979,6 +2131,7 @@ export class SnookerGame extends Component {
         this.setCueBallVisible(true);
         this.clearAimGuides();
         this.syncBallVisuals();
+        this.audio.play('cuePlace', { intensity: 0.78 });
         this.statusLabel.string = '白球已摆好，现在从白球位置拖拽即可瞄准开球。';
     }
 
@@ -1995,6 +2148,9 @@ export class SnookerGame extends Component {
                 this.spawnFloatingText('犯规', ball.position.clone(), SnookerTheme.text.danger, 26, 70);
             }
         }
+        this.audio.play('pocket', {
+            intensity: Math.max(0.55, Math.min(1.16, 0.62 + pottedBalls.length * 0.12)),
+        });
         this.shakeTable(5);
     }
 
@@ -2031,6 +2187,9 @@ export class SnookerGame extends Component {
         }));
         this.refreshHud();
         this.syncBallVisuals();
+        if (resolution.cueBallPotted) {
+            this.audio.play('foul', { intensity: objectBallCount > 0 ? 1.02 : 0.84 });
+        }
         if (objectBallCount > 1 && !resolution.cueBallPotted) {
             this.spawnFloatingText(`COMBO x${objectBallCount}`, v2(0, 48), SnookerTheme.text.accent, 28, 86);
         }
@@ -2136,6 +2295,7 @@ export class SnookerGame extends Component {
     private showSettlementLayout(): void {
         this.phase = PlayPhase.Settlement;
         this.updateGameplayPresentation();
+        this.audio.play('settlement', { intensity: this.isNewHighScoreThisMatch ? 1.08 : 0.92 });
         const config = this.getCurrentModeConfig();
         const note = this.isNewHighScoreThisMatch
             ? '已刷新本地最高分。'
