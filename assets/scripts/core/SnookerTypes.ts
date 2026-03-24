@@ -64,3 +64,5 @@ export interface ShotResolution {
     breakDelta: number;
     message: string;
 }
+
+
