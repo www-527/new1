@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCENE_PATH = ROOT / "assets" / "scenes" / "Main.scene"
+SCENE_PATH = ROOT / "assets" / "game" / "scenes" / "Main.scene"
 DEFAULT_SPRITE_MATERIAL_UUID = "eca5d2f2-8ef6-41c2-bbe6-f9c79d09c432"
 SPRITEFRAME_ID = "f9941"
 UI_LAYER = 33554432
@@ -24,7 +24,7 @@ def read_json(path: Path):
 
 
 def sprite_frame_uuid(asset_rel: str) -> str:
-    meta_path = (ROOT / "assets" / asset_rel).with_suffix(".png.meta")
+    meta_path = (ROOT / "assets" / "game" / asset_rel).with_suffix(".png.meta")
     meta = read_json(meta_path)
     return meta["subMetas"][SPRITEFRAME_ID]["uuid"]
 
@@ -76,6 +76,80 @@ class SceneBuilder:
         if parent_id is not None:
             self.items[parent_id]["_children"].append({"__id__": node_id})
         return node_id
+
+    def find_child(self, parent_id: int, name: str):
+        for child_ref in self.items[parent_id].get("_children", []):
+            child_id = child_ref["__id__"]
+            child = self.items[child_id]
+            if child.get("__type__") == "cc.Node" and child.get("_name") == name:
+                return child_id
+        return None
+
+    def component_of_type(self, node_id: int, component_type: str):
+        for component_ref in self.items[node_id].get("_components", []):
+            component_id = component_ref["__id__"]
+            component = self.items[component_id]
+            if component.get("__type__") == component_type:
+                return component_id
+        return None
+
+    def set_node_rect(self, node_id: int, size=None, pos=None, active=None):
+        if active is not None:
+            self.items[node_id]["_active"] = active
+        if pos is not None:
+            self.items[node_id]["_lpos"]["x"] = pos[0]
+            self.items[node_id]["_lpos"]["y"] = pos[1]
+            self.items[node_id]["_lpos"]["z"] = pos[2]
+        if size is not None:
+            transform_id = self.component_of_type(node_id, "cc.UITransform")
+            if transform_id is None:
+                raise RuntimeError(f"节点 {self.items[node_id]['_name']} 缺少 UITransform。")
+            self.items[transform_id]["_contentSize"]["width"] = size[0]
+            self.items[transform_id]["_contentSize"]["height"] = size[1]
+
+    def set_label(self, node_id: int, *, text=None, font_size=None, size=None, pos=None, color=None, horizontal_align=None, line_height=None):
+        if size is not None or pos is not None:
+            self.set_node_rect(node_id, size=size, pos=pos)
+        label_id = self.component_of_type(node_id, "cc.Label")
+        if label_id is None:
+            raise RuntimeError(f"节点 {self.items[node_id]['_name']} 缺少 Label。")
+        label = self.items[label_id]
+        if text is not None:
+            label["_string"] = text
+        if font_size is not None:
+            label["_actualFontSize"] = font_size
+            label["_fontSize"] = font_size
+        if color is not None:
+            label["_color"]["r"] = color[0]
+            label["_color"]["g"] = color[1]
+            label["_color"]["b"] = color[2]
+            label["_color"]["a"] = color[3]
+        if horizontal_align is not None:
+            label["_horizontalAlign"] = horizontal_align
+        if line_height is not None:
+            label["_lineHeight"] = line_height
+
+    def set_sprite_color(self, node_id: int, color):
+        sprite_id = self.component_of_type(node_id, "cc.Sprite")
+        if sprite_id is None:
+            raise RuntimeError(f"节点 {self.items[node_id]['_name']} 缺少 Sprite。")
+        sprite = self.items[sprite_id]
+        sprite["_color"]["r"] = color[0]
+        sprite["_color"]["g"] = color[1]
+        sprite["_color"]["b"] = color[2]
+        sprite["_color"]["a"] = color[3]
+
+    def set_parent(self, node_id: int, parent_id: int):
+        current_parent_ref = self.items[node_id].get("_parent")
+        if current_parent_ref is not None:
+            current_parent_id = current_parent_ref["__id__"]
+            self.items[current_parent_id]["_children"] = [
+                child_ref for child_ref in self.items[current_parent_id].get("_children", [])
+                if child_ref["__id__"] != node_id
+            ]
+        self.items[node_id]["_parent"] = {"__id__": parent_id}
+        if not any(child_ref["__id__"] == node_id for child_ref in self.items[parent_id].get("_children", [])):
+            self.items[parent_id]["_children"].append({"__id__": node_id})
 
     def add_opacity(self, node_id, opacity):
         comp_id = len(self.items)
@@ -269,12 +343,71 @@ def add_achievement_card(builder: SceneBuilder, parent_id, index, pos):
     builder.add_label(card, "AchievementFooter", "普通 · 1", 12, (190, 16), (0, -25, 0), TEXT_COLORS["accent"], line_height=14)
 
 
+def restyle_achievement_cards(builder: SceneBuilder, grid_id: int):
+    grid_width = 920
+    grid_height = 1780
+    card_width = 900
+    card_height = 92
+    gap_y = 18
+    top_padding = 28
+
+    builder.set_node_rect(grid_id, size=(grid_width, grid_height), pos=(0, 0, 0))
+    start_y = grid_height / 2 - top_padding - card_height / 2
+
+    for index in range(16):
+        card_id = builder.find_child(grid_id, f"AchievementCard-{index}")
+        if card_id is None:
+            continue
+
+        pos_y = start_y - index * (card_height + gap_y)
+        builder.set_node_rect(card_id, size=(card_width, card_height), pos=(0, pos_y, 0), active=True)
+
+        name_id = builder.find_child(card_id, "AchievementName")
+        desc_id = builder.find_child(card_id, "AchievementDesc")
+        footer_id = builder.find_child(card_id, "AchievementFooter")
+        badge_id = builder.find_child(card_id, "AchievementPointsBadge")
+
+        if name_id is not None:
+            builder.set_label(name_id, font_size=24, size=(540, 30), pos=(-146, 24, 0), horizontal_align=0, line_height=30)
+        if desc_id is not None:
+            builder.set_label(desc_id, font_size=15, size=(670, 28), pos=(-81, -2, 0), horizontal_align=0, line_height=18)
+        if footer_id is not None:
+            builder.set_label(footer_id, font_size=14, size=(670, 20), pos=(-81, -28, 0), horizontal_align=0, line_height=18)
+        if badge_id is not None:
+            builder.set_node_rect(badge_id, size=(96, 30), pos=(362, 22, 0))
+            builder.set_sprite_color(badge_id, (210, 190, 126, 255))
+            points_id = builder.find_child(badge_id, "AchievementPointsLabel")
+            if points_id is not None:
+                builder.set_label(points_id, font_size=16, size=(72, 20), pos=(0, 0, 0), line_height=20)
+
+
+def ensure_achievement_viewport(builder: SceneBuilder, grid_shell_id: int):
+    viewport = builder.find_child(grid_shell_id, "AchievementGridViewport")
+    if viewport is None:
+        viewport = builder.add_node("AchievementGridViewport", grid_shell_id, (944, 308), pos=(0, 0, 0))
+    else:
+        builder.set_node_rect(viewport, size=(944, 308), pos=(0, 0, 0), active=True)
+    return viewport
+
+
 def ensure_achievement_panel(builder: SceneBuilder):
     game_root = builder.find_node("GameRoot")
     if game_root is None:
         raise RuntimeError("未找到 GameRoot，无法写入静态成就面板。")
 
-    if builder.find_node("AchievementPanel") is not None:
+    panel = builder.find_node("AchievementPanel")
+    if panel is not None:
+        summary = builder.find_node("AchievementSummaryPlate")
+        grid_shell = builder.find_node("AchievementGridShell")
+        grid = builder.find_node("AchievementGrid")
+        if summary is None or grid_shell is None or grid is None:
+            raise RuntimeError("现有成就面板缺少关键节点，无法重排为滚动栏。")
+        builder.set_node_rect(summary, size=(984, 88), pos=(0, 148, 0))
+        builder.set_node_rect(grid_shell, size=(992, 344), pos=(0, -78, 0))
+        viewport = ensure_achievement_viewport(builder, grid_shell)
+        if builder.items[grid]["_parent"] is None or builder.items[grid]["_parent"]["__id__"] != viewport:
+            builder.set_parent(grid, viewport)
+        restyle_achievement_cards(builder, grid)
         return
 
     panel = builder.add_node("AchievementPanel", game_root, (1280, 720), pos=(0, 0, 30), active=False)
@@ -303,28 +436,15 @@ def ensure_achievement_panel(builder: SceneBuilder):
     add_summary_chip(builder, summary, "SummaryPoints", "成就点", (0, 0, 0))
     add_summary_chip(builder, summary, "SummaryHidden", "隐藏收集", (286, 0, 0))
 
-    grid_shell = builder.add_node("AchievementGridShell", felt, (992, 400), pos=(0, -58, 0))
+    grid_shell = builder.add_node("AchievementGridShell", felt, (992, 344), pos=(0, -78, 0))
     builder.add_sprite(grid_shell, "resources/textures/ui/panel_inset.png", sliced=True)
     builder.add_opacity(grid_shell, 255)
 
-    grid = builder.add_node("AchievementGrid", grid_shell, (940, 356), pos=(0, 0, 0))
-    column_count = 4
-    card_width = 220
-    card_height = 78
-    gap_x = 14
-    gap_y = 14
-    total_width = column_count * card_width + (column_count - 1) * gap_x
-    start_x = -total_width / 2 + card_width / 2
-    start_y = 126
+    viewport = builder.add_node("AchievementGridViewport", grid_shell, (944, 308), pos=(0, 0, 0))
+    grid = builder.add_node("AchievementGrid", viewport, (920, 1780), pos=(0, 0, 0))
     for index in range(16):
-        column = index % column_count
-        row = index // column_count
-        add_achievement_card(
-            builder,
-            grid,
-            index,
-            (start_x + column * (card_width + gap_x), start_y - row * (card_height + gap_y), 0),
-        )
+        add_achievement_card(builder, grid, index, (0, 0, 0))
+    restyle_achievement_cards(builder, grid)
 
     builder.add_button(felt, "AchievementCloseButton", "关闭", (426, 228, 0), (146, 52), "resources/textures/ui/button_neutral.png")
 
@@ -334,7 +454,7 @@ def main():
     builder = SceneBuilder(items)
     ensure_overlay_panels(builder)
     ensure_achievement_panel(builder)
-    SCENE_PATH.write_text(json.dumps(items, indent=2) + "\n", encoding="utf-8")
+    SCENE_PATH.write_text(json.dumps(items, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print("同步完成：已写入设置/结算/成就静态面板。")
 
 

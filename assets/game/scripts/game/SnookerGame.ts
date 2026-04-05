@@ -5,6 +5,7 @@ import {
     Graphics,
     Label,
     Layers,
+    Mask,
     Node,
     Size,
     Sprite,
@@ -149,6 +150,12 @@ export class SnookerGame extends Component {
     private achievementUnlockedCountLabel!: Label;
     private achievementPointsLabel!: Label;
     private achievementHiddenLabel!: Label;
+    private achievementScrollShell!: Node;
+    private achievementScrollOffset = 0;
+    private achievementScrollMaxOffset = 0;
+    private achievementScrollDragActive = false;
+    private achievementScrollDragStartY = 0;
+    private achievementScrollDragStartOffset = 0;
 
     private helperButton!: Node;
     private helperButtonLabel!: Label;
@@ -618,6 +625,7 @@ export class SnookerGame extends Component {
 
     private buildAchievementPanel(): void {
         this.achievementPanel = this.mustFindNode(this.node, 'AchievementPanel');
+        this.achievementScrollShell = this.mustFindNode(this.achievementPanel, 'AchievementGridViewport');
         this.achievementGrid = this.mustFindNode(this.achievementPanel, 'AchievementGrid');
         this.achievementUnlockedCountLabel = this.mustFindNode(this.achievementPanel, 'SummaryUnlocked-Value').getComponent(Label)!;
         this.achievementPointsLabel = this.mustFindNode(this.achievementPanel, 'SummaryPoints-Value').getComponent(Label)!;
@@ -635,6 +643,7 @@ export class SnookerGame extends Component {
         this.attachButtonRuntime(closeButton, () => this.closeAchievementPanel());
         this.restyleButton(closeButton, closeLabel, '关闭', 'neutral');
         this.emphasizeSecondaryButton(closeButton);
+        this.setupAchievementScrollShell();
         this.cacheAchievementCardViews();
         this.refreshAchievementPanel();
         this.achievementPanel.active = false;
@@ -659,9 +668,89 @@ export class SnookerGame extends Component {
             }));
     }
 
+    private setupAchievementScrollShell(): void {
+        const mask = this.achievementScrollShell.getComponent(Mask) ?? this.achievementScrollShell.addComponent(Mask);
+        mask.type = Mask.Type.RECT;
+
+        const scrollShell = this.achievementScrollShell as Node & { __snookerAchievementScrollBound?: boolean };
+        if (scrollShell.__snookerAchievementScrollBound) {
+            return;
+        }
+        scrollShell.__snookerAchievementScrollBound = true;
+
+        const stopEvent = (event: any) => {
+            event.propagationStopped = true;
+        };
+        const beginDrag = (event: any) => {
+            this.achievementScrollDragActive = true;
+            this.achievementScrollDragStartY = event.getUILocation().y;
+            this.achievementScrollDragStartOffset = this.achievementScrollOffset;
+            stopEvent(event);
+        };
+        const updateDrag = (event: any) => {
+            if (!this.achievementScrollDragActive) {
+                return;
+            }
+            const deltaY = event.getUILocation().y - this.achievementScrollDragStartY;
+            this.setAchievementScrollOffset(this.achievementScrollDragStartOffset - deltaY);
+            stopEvent(event);
+        };
+        const endDrag = (event?: any) => {
+            this.achievementScrollDragActive = false;
+            if (event) {
+                stopEvent(event);
+            }
+        };
+
+        this.achievementScrollShell.on(Node.EventType.TOUCH_START, beginDrag, this);
+        this.achievementScrollShell.on(Node.EventType.TOUCH_MOVE, updateDrag, this);
+        this.achievementScrollShell.on(Node.EventType.TOUCH_END, endDrag, this);
+        this.achievementScrollShell.on(Node.EventType.TOUCH_CANCEL, endDrag, this);
+        this.achievementScrollShell.on(Node.EventType.MOUSE_DOWN, beginDrag, this);
+        this.achievementScrollShell.on(Node.EventType.MOUSE_MOVE, updateDrag, this);
+        this.achievementScrollShell.on(Node.EventType.MOUSE_UP, endDrag, this);
+        this.achievementScrollShell.on(Node.EventType.MOUSE_LEAVE, endDrag, this);
+        this.achievementScrollShell.on(Node.EventType.MOUSE_WHEEL, (event: any) => {
+            this.scrollAchievementBy(-event.getScrollY() * 0.32);
+            stopEvent(event);
+        }, this);
+    }
+
+    private syncAchievementScrollBounds(): void {
+        if (!this.achievementScrollShell || !this.achievementGrid) {
+            return;
+        }
+        const viewHeight = this.achievementScrollShell.getComponent(UITransform)?.contentSize.height ?? 0;
+        const contentHeight = this.achievementGrid.getComponent(UITransform)?.contentSize.height ?? 0;
+        this.achievementScrollMaxOffset = Math.max(0, contentHeight - viewHeight);
+        this.setAchievementScrollOffset(this.achievementScrollOffset);
+    }
+
+    private scrollAchievementToTop(): void {
+        this.setAchievementScrollOffset(0);
+    }
+
+    private scrollAchievementBy(delta: number): void {
+        this.setAchievementScrollOffset(this.achievementScrollOffset + delta);
+    }
+
+    private setAchievementScrollOffset(offset: number): void {
+        if (!this.achievementScrollShell || !this.achievementGrid) {
+            return;
+        }
+        const viewHeight = this.achievementScrollShell.getComponent(UITransform)?.contentSize.height ?? 0;
+        const contentHeight = this.achievementGrid.getComponent(UITransform)?.contentSize.height ?? 0;
+        const maxOffset = Math.max(0, contentHeight - viewHeight);
+        this.achievementScrollOffset = math.clamp(offset, 0, maxOffset);
+        this.achievementScrollMaxOffset = maxOffset;
+        const centeredY = (viewHeight - contentHeight) * 0.5 + this.achievementScrollOffset;
+        this.achievementGrid.setPosition(0, centeredY, 0);
+    }
+
     private openAchievementPanel(): void {
         this.refreshAchievementPanel();
         this.achievementPanel.active = true;
+        this.scrollAchievementToTop();
     }
 
     private closeAchievementPanel(): void {
@@ -709,6 +798,7 @@ export class SnookerGame extends Component {
             view.footerLabel.string = unlocked ? `已解锁 · ${definition.rarity}` : this.getAchievementCardFooter(definition);
             view.footerLabel.color = unlocked ? SnookerTheme.text.success : SnookerTheme.text.accent;
         });
+        this.syncAchievementScrollBounds();
     }
 
     private getAchievementCardFooter(definition: AchievementDefinition): string {
@@ -973,7 +1063,7 @@ export class SnookerGame extends Component {
         this.shotsLabel = UiFactory.createLabel(progressCard, 'ShotsLabel', '', 18, v3(0, -6, 0), SnookerTheme.text.accent, 360, 22);
         this.targetHintLabel = UiFactory.createLabel(progressCard, 'TargetHintLabel', '', 16, v3(0, -26, 0), SnookerTheme.text.secondary, 360, 20);
 
-        const settlementTestButton = this.createButton(this.topHud, '测结算', v3(406, 0, 0), new Size(116, 54), 'bronze', () => this.showSettlementPreview());
+        const settlementTestButton = this.createButton(this.topHud, '结算', v3(406, 0, 0), new Size(116, 54), 'bronze', () => this.showSettlementPreview());
         const settlementTestLabel = this.mustFindNode(settlementTestButton, 'ButtonLabel').getComponent(Label)!;
         settlementTestLabel.fontSize = 20;
         this.createButton(this.topHud, '||', v3(520, 0, 0), new Size(72, 54), 'blue', () => this.togglePause());
